@@ -14,6 +14,11 @@ class Port:
     def get_connection(self):
         print(self.connected_port)
 
+    def is_connected(self):
+        if self.connected_port is not None:
+            return True
+        else:
+            return False
 
 
 class InputPort(Port):
@@ -37,7 +42,6 @@ class OutputPort(Port):
         if not isinstance(input, InputPort):
             raise TypeError("OutputPort must connect to InputPort.")
         input.connect(self)
-
 
     def transmit(self, data: Any):
         self.value = data

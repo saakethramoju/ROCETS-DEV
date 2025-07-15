@@ -33,7 +33,7 @@ class Component:
 
             if matched_in_port:
                 out_port.connect(matched_in_port)
-                print(f"[Connected] {self.name}.{out_name} → {other.name}.{matched_in_port.name}")
+                print(f"[Connected] {self.name}: {out_name} → {other.name}: {matched_in_port.name}")
             else:
                 print(f"[Warning] No input port found for output '{out_name}' in component '{other.name}'")
 
@@ -47,7 +47,7 @@ class Component:
             return
 
         self.outputs[output_port].connect(input_component.inputs[input_port])
-        #print(f"[Connected] {self.name}.{output_port} → {input_component.name}.{input_port}")
+        print(f"[Connected] {self.name}: {output_port} → {input_component.name}: {input_port}")
 
 
     def __repr__(self):
@@ -86,4 +86,3 @@ if __name__ == "__main__":
 
     print(A)
     print(B)
-
