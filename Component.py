@@ -1,7 +1,6 @@
 from dataclasses import dataclass
 from Port import InputPort, OutputPort
 
-
 class Component:
     def __init__(self, name: str):
         self.name = name
@@ -12,64 +11,47 @@ class Component:
         port = InputPort(name=port_name, component=self.name)
         self.inputs[port_name] = port
         return port
-    
+
     def add_output(self, port_name: str):
         port = OutputPort(name=port_name, component=self.name)
         self.outputs[port_name] = port
         return port
-    
+
     def receive(self, port_name: str):
         return self.inputs[port_name].receive()
 
-    def transmit(self, port_name: str, value: any):
+    def transmit(self, port_name: str, value):
         self.outputs[port_name].transmit(value)
 
     def connect_to_input(self, other: "Component"):
-        # Build a lowercase map of the other component's input ports
-        input_map = {name.lower(): port for name, port in other.inputs.items()}
-
         for out_name, out_port in self.outputs.items():
-            matched_in_port = input_map.get(out_name.lower())
-
-            if matched_in_port:
-                out_port.connect(matched_in_port)
-                print(f"[Connected] {self.name}: {out_name} → {other.name}: {matched_in_port.name}")
+            match = other.inputs.get(out_name)
+            if match:
+                out_port.connect(match)
+                print(f"[Connected] {self.name}: {out_name} → {other.name}: {match.name}")
             else:
-                print(f"[Warning] No input port found for output '{out_name}' in component '{other.name}'")
+                print(f"[Warning] No input port for output '{out_name}' in '{other.name}'")
 
     def manual_connect(self, output_port: str, input_component: "Component", input_port: str):
-        if output_port not in self.outputs:
-            print(f"[Error] Output port '{output_port}' not found in component '{self.name}'")
-            return
+        out = self.outputs.get(output_port)
+        inp = input_component.inputs.get(input_port)
 
-        if input_port not in input_component.inputs:
-            print(f"[Error] Input port '{input_port}' not found in component '{input_component.name}'")
-            return
-
-        self.outputs[output_port].connect(input_component.inputs[input_port])
-        print(f"[Connected] {self.name}: {output_port} → {input_component.name}: {input_port}")
-
+        if out and inp:
+            out.connect(inp)
+            print(f"[Connected] {self.name}: {output_port} → {input_component.name}: {input_port}")
+        else:
+            print(f"[Error] Could not connect {output_port} to {input_port}")
 
     def __repr__(self):
-        inputs_lines = "\n    ".join(
-            f"{p.name} ← {p.connected_port.component} as {p.connected_port.name}"
-            if p.connected_port else f"{p.name} ← None"
-            for p in self.inputs.values()
-        ) or "    None"
+        def port_str(port, arrow, default="None"):
+            return f"{port.name} {arrow} {port.connected_port.component} as {port.connected_port.name}" if port.connected_port else f"{port.name} {arrow} {default}"
 
-        outputs_lines = "\n    ".join(
-            f"{p.name} → {p.connected_port.component} as {p.connected_port.name}"
-            if p.connected_port else f"{p.name} → None"
-            for p in self.outputs.values()
-        ) or "    None"
+        inputs_str = "\n    ".join(port_str(p, "←") for p in self.inputs.values()) or "    None"
+        outputs_str = "\n    ".join(port_str(p, "→") for p in self.outputs.values()) or "    None"
 
-        return (
-            f"* {self.name}\n"
-            f"  Inputs:\n    {inputs_lines}\n"
-            f"  Outputs:\n    {outputs_lines}"
-        )
+        return f"* {self.name}\n  Inputs:\n    {inputs_str}\n  Outputs:\n    {outputs_str}"
 
-    
+
 if __name__ == "__main__":
 
     A = Component("Tank")
