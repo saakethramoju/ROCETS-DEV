@@ -3,3 +3,6 @@ class MissingConfigurationError(Exception):
 
 class PortNotConnectedError(Exception):
     pass
+
+class NoInjectorError(Exception):
+    pass

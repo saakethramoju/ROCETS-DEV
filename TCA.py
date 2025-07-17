@@ -2,8 +2,9 @@ from typing import Optional
 import numpy as np
 from scipy.interpolate import interp1d
 from Component import Component
+from Injector import Injector
 from rocketcea.cea_obj_w_units import CEA_Obj
-from Exceptions import MissingConfigurationError, PortNotConnectedError
+from Exceptions import MissingConfigurationError, PortNotConnectedError, NoInjectorError
 #import matplotlib.pyplot as plt
 
 class TCA(Component):
@@ -20,9 +21,22 @@ class TCA(Component):
         self.chamber_pressure = self.mixture_ratio = self.mdot = None
         self.fuel = self.oxidizer = None
         self.fuel_temperature = self.oxidizer_temperature = None
+        self.g = 9.80665 # m/s^2
 
     def _initialize_necessary_ports(self):
+        # Inputs
         self.injector_data = self.add_input("Injector Data")
+
+        # Outputs
+        # EMPTY
+
+    def _initialize_extra_ports(self):
+        # Inputs
+        # EMPTY
+
+        # Outputs
+        # EMPTY
+        pass
 
     def set_config(self, config: dict):
         self.configuration = config
@@ -51,9 +65,16 @@ class TCA(Component):
         self.percent_bell      = opt("Percent Bell (%)", nozzle_type == "bell")
         self.combustor_area    = combustor_area
 
-    def set_engine_parameters(self):
+    def check_injector_connection(self):
         if not self.injector_data.is_connected():
             raise PortNotConnectedError(f"Port not connected: {self.injector_data.name} in {self.name}")
+        #elif type(self.injector_data.component) != Injector:
+        #    raise NoInjectorError("The connected port is not an Injector!") # UNCOMMENT THIS LATER !!!!!!!
+        else:
+            return True
+
+    def set_engine_parameters(self):
+        self.check_injector_connection()
         self.chamber_pressure = self.injector_data.value["Chamber Pressure (psia)"]
         self.fuel = self.injector_data.value["Fuel"]
         self.oxidizer = self.injector_data.value["Oxidizer"]
@@ -65,20 +86,32 @@ class TCA(Component):
 
     def ODE(self):
         self.set_engine_parameters()
+
+        if not self.configuration:
+            raise MissingConfigurationError(f"No configuration provided for {self.name}")
+        
         if self.combustor_area.lower() == 'finite':
-            if not self.configuration:
-                raise MissingConfigurationError(f"No configuration provided for {self.name}")
             ode = CEA_Obj(oxName=self.oxidizer, fuelName=self.fuel, temperature_units='degK', 
                  cstar_units='m/sec', specific_heat_units='kJ/kg degK', 
                  sonic_velocity_units='m/s', enthalpy_units='J/kg', 
                  density_units='kg/m^3', fac_CR=self.contraction_ratio)
+            self.chamber_pressure_rayleigh = self.chamber_pressure * (1 / ode.get_Pinj_over_Pcomb(self.chamber_pressure, self.mixture_ratio, self.contraction_ratio))
+        
         else:
             ode = CEA_Obj(oxName=self.oxidizer, fuelName=self.fuel, temperature_units='degK', 
                  cstar_units='m/sec', specific_heat_units='kJ/kg degK', 
                  sonic_velocity_units='m/s', enthalpy_units='J/kg', 
-                 density_units='kg/m^3', fac_CR=self.contraction_ratio)
-        self.
-            
+                 density_units='kg/m^3')
+            self.chamber_pressure_rayleigh = None
+        
+        # Thrust coefficient
+        self.thrust_coefficient_ideal, _, _ = ode.get_PambCf(self.ambient_pressure, self.chamber_pressure, self.mixture_ratio, self.expansion_ratio)
+        # Characteristic velocity
+        self.cstar_ideal = ode.get_Cstar(self.chamber_pressure, self.mixture_ratio)
+        # Specific impulse
+        self.isp_ideal, _ = ode.estimate_Ambient_Isp(self.chamber_pressure, self.mixture_ratio, self.expansion_ratio, self.ambient_pressure)
+        self.isp_vaccuum_ideal = ode.get_Isp(self.chamber_pressure, self.mixture_ratio, self.expansion_ratio)
+        self.thrust_coefficient_vaccum_ideal = self.isp_vaccuum_ideal * self.g / self.cstar_ideal
 
 
     def generate_chamber_geometry(self, points=100):
@@ -216,11 +249,7 @@ if __name__ == "__main__":
     tca = TCA("Heatsink")
     injector = Component("Coax")
 
-    #print(tca)
-    #print(injector)
-
     injector_output = injector.add_output("TCA Inputs")
-    pluh = injector.add_output("leakage")
     injector.manual_connect("TCA Inputs", tca, "Injector Data")
 
 
@@ -256,4 +285,9 @@ if __name__ == "__main__":
               "Combustor Area": "Finite"}
     
     tca.set_config(config)
-    print(tca.L_star())
+    tca.ODE()
+    #print(tca.cstar_ideal)
+
+
+
+    

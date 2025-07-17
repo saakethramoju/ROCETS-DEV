@@ -17,9 +17,11 @@ class Component:
         self.outputs[port_name] = port
         return port
 
+    # Sets the port value
     def receive(self, port_name: str):
         return self.inputs[port_name].receive()
 
+    # Sets what value to send
     def transmit(self, port_name: str, value):
         self.outputs[port_name].transmit(value)
 
