@@ -4,7 +4,8 @@ from scipy.interpolate import interp1d
 from Component import Component
 from Injector import Injector
 from rocketcea.cea_obj_w_units import CEA_Obj
-from Exceptions import MissingConfigurationError, PortNotConnectedError, NoInjectorError
+from Exceptions import (MissingConfigurationError, PortNotConnectedError, MissingConfigurationKeyError,
+                        MissingConfigurationValueError)
 #import matplotlib.pyplot as plt
 
 class TCA(Component):
@@ -13,6 +14,7 @@ class TCA(Component):
         self.configuration = config
         self._initialize_defaults()
         self._initialize_necessary_ports()
+        self._initialize_extra_ports()
 
         if config:
             self.set_config(config)
@@ -65,13 +67,52 @@ class TCA(Component):
         self.percent_bell      = opt("Percent Bell (%)", nozzle_type == "bell")
         self.combustor_area    = combustor_area
 
+    def validate_config(self):
+        if not self.configuration:
+            raise MissingConfigurationError(f"No configuration provided for {self.name}")
+        config = self.configuration
+
+        required_keys = [
+            "Number of Points Contour",
+            "Nozzle Type",
+            "Throat Radius (in)",
+            "Chamber Length (in)",
+            "Contraction Ratio",
+            "Convergence Half-Angle (°)",
+            "Convergence Radius Factor",
+            "Lead-in Radius Factor",
+            "Lead-out Radius Factor",
+            "Expansion Ratio",
+            "Exit Pressure (psia)",
+            "Ambient Pressure (psia)",
+            "Combustor Area"
+        ]
+
+        # Check unconditional keys
+        for key in required_keys:
+            if key not in config:
+                raise MissingConfigurationKeyError(f"Missing required configuration key: '{key}'")
+            if config[key] is None:
+                raise MissingConfigurationValueError(f"Configuration value for '{key}' cannot be None")
+
+        nozzle_type = config.get("Nozzle Type", "").lower()
+
+        # Conditional keys based on nozzle type
+        if nozzle_type == "conical":
+            if "Divergence Half-Angle (°)" not in config or config["Divergence Half-Angle (°)"] is None:
+                raise MissingConfigurationKeyError("Missing or None value for required conical nozzle key: 'Divergence Half-Angle (°)'")
+        elif nozzle_type == "bell":
+            for key in ["Divergence Entrance Angle (°)", "Divergence Exit Angle (°)", "Percent Bell (%)"]:
+                if key not in config:
+                    raise MissingConfigurationKeyError(f"Missing required bell nozzle configuration key: '{key}'")
+                if config[key] is None:
+                    raise MissingConfigurationValueError(f"Configuration value for '{key}' cannot be None")
+
+
     def check_injector_connection(self):
         if not self.injector_data.is_connected():
-            raise PortNotConnectedError(f"Port not connected: {self.injector_data.name} in {self.name}")
-        #elif type(self.injector_data.component) != Injector:
-        #    raise NoInjectorError("The connected port is not an Injector!") # UNCOMMENT THIS LATER !!!!!!!
-        else:
-            return True
+            raise PortNotConnectedError(f"Input ort not connected: {self.injector_data.name} in {self.name}")
+        return True
 
     def set_engine_parameters(self):
         self.check_injector_connection()
@@ -86,10 +127,8 @@ class TCA(Component):
 
     def ODE(self):
         self.set_engine_parameters()
+        self.validate_config()
 
-        if not self.configuration:
-            raise MissingConfigurationError(f"No configuration provided for {self.name}")
-        
         if self.combustor_area.lower() == 'finite':
             ode = CEA_Obj(oxName=self.oxidizer, fuelName=self.fuel, temperature_units='degK', 
                  cstar_units='m/sec', specific_heat_units='kJ/kg degK', 
@@ -115,15 +154,13 @@ class TCA(Component):
 
 
     def generate_chamber_geometry(self, points=100):
-        if not self.configuration:
-            raise MissingConfigurationError(f"No configuration provided for {self.name}")
+        self.validate_config()
         z = np.linspace(0, self.chamber_length, points)
         r = np.full_like(z, np.sqrt(self.contraction_ratio) * self.throat_radius)
         return self.resample_curve(np.vstack((z, r)), self.contour_points)
 
     def generate_converging_geometry(self, points=100):
-        if not self.configuration:
-            raise MissingConfigurationError(f"No configuration provided for {self.name}")
+        self.validate_config()
         R_t, eps_c = self.throat_radius, self.contraction_ratio
         Rc, Rtc = self.rc_rt * R_t, self.rtc_rt * R_t
         theta_c = np.radians(self.theta_c)
@@ -200,8 +237,7 @@ class TCA(Component):
         return np.vstack((fx(s_new), fy(s_new)))
 
     def throat_area(self):
-        if not self.configuration:
-            raise MissingConfigurationError(f"No configuration provided for {self.name}")
+        self.validate_config()
         return np.pi * self.throat_radius**2
 
     def injector_area(self):
@@ -244,6 +280,9 @@ class TCA(Component):
     def L_star(self):
         return (self.chamber_volume() + self.converging_volume()) / (self.throat_area())
     
+
+
+
 if __name__ == "__main__":
     # Instantiate components with lowercase names
     tca = TCA("Heatsink")
