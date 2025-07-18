@@ -1,54 +1,68 @@
 from dataclasses import dataclass, field
-from typing import Optional, Any
+from typing import Optional, List, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from Component import Component
+
 
 @dataclass
 class Port:
     name: str
-    #component: str
-    connected_port: Optional["Port"] = field(default=None, init=False)
-    value: Any = field(default=None, init=False)
+    component: "Component"
 
-    def connect(self, other: "Port"):
-        raise NotImplementedError("Connect must be implemented in subclasses.")
+    def is_connected(self) -> bool:
+        raise NotImplementedError("Implemented in subclasses")
 
-    def get_connection(self):
-        print(self.connected_port)
+    def __repr__(self):
+        raise NotImplementedError("Use __repr__ in InputPort or OutputPort")
 
-    def is_connected(self):
-        if self.connected_port is not None:
-            return True
-        else:
-            return False
 
 @dataclass
 class InputPort(Port):
-    component: str
+    connected_ports: List["OutputPort"] = field(default_factory=list, init=False)
+
+    @property
+    def connected_components(self) -> List["Component"]:
+        return [f"{p.component.name}" for p in self.connected_ports]
 
     def connect(self, output: "OutputPort"):
         if not isinstance(output, OutputPort):
             raise TypeError("InputPort must connect to OutputPort.")
-        self.connected_port = output
-        output.connected_port = self
+        if output not in self.connected_ports:
+            self.connected_ports.append(output)
+        if self not in output.connected_ports:
+            output.connected_ports.append(self)
 
-    # Sets the port value
-    def receive(self):
-        if self.connected_port is not None:
-            self.value = self.connected_port.value
+    def is_connected(self) -> bool:
+        return len(self.connected_ports) > 0
+
+    def __repr__(self):
+        if self.is_connected():
+            conns = ", ".join(f"{p.component.name}.{p.name}" for p in self.connected_ports)
+            return f"{self.component.name}.{self.name} ← {conns}"
         else:
-            self.value = None
-        return self.value
+            return f"{self.component.name}.{self.name} ← None"
 
 
 @dataclass
 class OutputPort(Port):
-    component: str
+    connected_ports: List[InputPort] = field(default_factory=list, init=False)
 
-    def connect(self, input: "InputPort"):
-        if not isinstance(input, InputPort):
+    @property
+    def connected_components(self) -> List["Component"]:
+        return [f"{p.component.name}" for p in self.connected_ports]
+
+    def connect(self, input_port: "InputPort"):
+        if not isinstance(input_port, InputPort):
             raise TypeError("OutputPort must connect to InputPort.")
-        input.connect(self)
+        input_port.connect(self)
 
-    # Sets the data to be transmitted
-    def transmit(self, data: Any):
-        self.value = data
+    def is_connected(self) -> bool:
+        return len(self.connected_ports) > 0
 
+    def __repr__(self):
+        if self.is_connected():
+            conns = ", ".join(f"{p.component.name}.{p.name}" for p in self.connected_ports)
+            return f"{self.component.name}.{self.name} → {conns}"
+        else:
+            return f"{self.component.name}.{self.name} → None"

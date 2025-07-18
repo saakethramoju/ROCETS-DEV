@@ -12,3 +12,13 @@ class MissingConfigurationKeyError(KeyError):
 
 class MissingConfigurationValueError(ValueError):
     pass
+
+class MissingGuessError(Exception):
+    pass
+
+class MissingGuessKeyError(KeyError):
+    pass
+
+
+class MissingGuessValueError(ValueError):
+    pass

@@ -3,15 +3,18 @@ import numpy as np
 from scipy.interpolate import interp1d
 from Component import Component
 from Injector import Injector
+from Constants import Constants as cs
 from rocketcea.cea_obj_w_units import CEA_Obj
 from Exceptions import (MissingConfigurationError, PortNotConnectedError, MissingConfigurationKeyError,
-                        MissingConfigurationValueError)
+                        MissingConfigurationValueError, MissingGuessError, MissingGuessKeyError,
+                        MissingGuessValueError)
 #import matplotlib.pyplot as plt
 
 class TCA(Component):
-    def __init__(self, name: str, config: Optional[dict] = None):
+    def __init__(self, name: str, config: Optional[dict] = None, guess: Optional[dict] = None):
         super().__init__(name)
         self.configuration = config
+        self.guess = guess
         self._initialize_defaults()
         self._initialize_necessary_ports()
         self._initialize_extra_ports()
@@ -19,11 +22,19 @@ class TCA(Component):
         if config:
             self.set_config(config)
 
+    #def on_connect(self):
+    #    print("test")
+
     def _initialize_defaults(self):
-        self.chamber_pressure = self.mixture_ratio = self.mdot = None
         self.fuel = self.oxidizer = None
+        self.steady_state_converged = True
+        self._simlation_start = False
+        #self.steady_state_converged = True
+        #self.steady_state_solved = False
+        #self.transient_solved = False
+
+        self.chamber_pressure = self.mixture_ratio = None
         self.fuel_temperature = self.oxidizer_temperature = None
-        self.g = 9.80665 # m/s^2
 
     def _initialize_necessary_ports(self):
         # Inputs
@@ -39,6 +50,51 @@ class TCA(Component):
         # Outputs
         # EMPTY
         pass
+
+    def set_injector_data(self):
+        self.check_injector_connection()
+
+        self.fuel = self.injector_data.connected_ports[0].component.fuel
+        self.oxidizer = self.injector_data.connected_ports[0].component.fuel
+
+        return True
+
+
+    def set_guess(self, guess: dict):
+        self.guess = guess
+        get = guess.get
+
+        self.chamber_pressure     = get("Chamber Pressure (psia)")
+        self.mixture_ratio        = get("Mixture Ratio")
+        self.fuel_temperature     = get("Fuel Temperature (K)")
+        self.oxidizer_temperature = get("Oxidizer Temperature (K)")
+
+        self._simlation_start = True
+
+        return True
+    
+
+    def validate_guess(self):
+        if not self.guess:
+            raise MissingGuessError(f"Initial guesses not provided for {self.name}")
+        
+        guess = self.guess
+
+        required_keys = [
+            'Chamber Pressure (psia)',
+            'Mixture Ratio',
+            'Fuel Temperature (K)',
+            'Oxidizer Temperature (K)'
+        ]
+        for key in required_keys:
+            if key not in guess:
+                raise MissingGuessKeyError(f"Missing required initial guess key: '{key}'")
+            if guess[key] is None:
+                raise MissingGuessValueError(f"Initial guess value for '{key}' cannot be None")
+            
+        return True
+            
+
 
     def set_config(self, config: dict):
         self.configuration = config
@@ -66,6 +122,7 @@ class TCA(Component):
         self.theta_e           = opt("Divergence Exit Angle (°)", nozzle_type == "bell")
         self.percent_bell      = opt("Percent Bell (%)", nozzle_type == "bell")
         self.combustor_area    = combustor_area
+
 
     def validate_config(self):
         if not self.configuration:
@@ -107,13 +164,45 @@ class TCA(Component):
                     raise MissingConfigurationKeyError(f"Missing required bell nozzle configuration key: '{key}'")
                 if config[key] is None:
                     raise MissingConfigurationValueError(f"Configuration value for '{key}' cannot be None")
+                
+        return True
 
 
     def check_injector_connection(self):
         if not self.injector_data.is_connected():
-            raise PortNotConnectedError(f"Input ort not connected: {self.injector_data.name} in {self.name}")
+            raise PortNotConnectedError(f"Injector input port must be connected: {self.injector_data.name} in {self.name}")
         return True
+    
 
+    def generate_cea(self):
+        if self.combustor_area.lower() == 'finite':
+            cea = CEA_Obj(oxName=self.oxidizer, fuelName=self.fuel, temperature_units='degK', 
+                 cstar_units='m/sec', specific_heat_units='kJ/kg degK', 
+                 sonic_velocity_units='m/s', enthalpy_units='J/kg', 
+                 density_units='kg/m^3', fac_CR=self.contraction_ratio)
+            
+            self.chamber_pressure_rayleigh = self.chamber_pressure * (1 / cea.get_Pinj_over_Pcomb(self.chamber_pressure, self.mixture_ratio, self.contraction_ratio))
+        
+        else:
+            cea = CEA_Obj(oxName=self.oxidizer, fuelName=self.fuel, temperature_units='degK', 
+                 cstar_units='m/sec', specific_heat_units='kJ/kg degK', 
+                 sonic_velocity_units='m/s', enthalpy_units='J/kg', 
+                 density_units='kg/m^3')
+            self.chamber_pressure_rayleigh = self.chamber_pressure
+
+        return cea
+    
+
+    def get_mdot(self):
+        At = self.throat_area()
+        cea = self.generate_cea()
+        Tt = cea.get_Temperatures(self.chamber_pressure_rayleigh, self.mixture_ratio, self.expansion_ratio)
+        mwt, gammat = cea.get_Throat_MolWt_gamma(self.chamber_pressure_rayleigh, self.mixture_ratio, self.expansion_ratio)
+        mdot = (At * self.chamber_pressure_rayleigh * 6894.76) * np.sqrt(mwt * gammat / (cs.R * Tt))
+        return mdot
+
+
+    '''
     def set_engine_parameters(self):
         self.check_injector_connection()
         self.chamber_pressure = self.injector_data.value["Chamber Pressure (psia)"]
@@ -124,7 +213,7 @@ class TCA(Component):
         self.oxidizer_temperature = self.injector_data.value["Oxidizer Temperature (K)"]
         self.fuel_temperature = self.injector_data.value["Fuel Temperature (K)"]
 
-
+    
     def ODE(self):
         self.set_engine_parameters()
         self.validate_config()
@@ -150,7 +239,7 @@ class TCA(Component):
         # Specific impulse
         self.isp_ideal, _ = ode.estimate_Ambient_Isp(self.chamber_pressure, self.mixture_ratio, self.expansion_ratio, self.ambient_pressure)
         self.isp_vaccuum_ideal = ode.get_Isp(self.chamber_pressure, self.mixture_ratio, self.expansion_ratio)
-        self.thrust_coefficient_vaccum_ideal = self.isp_vaccuum_ideal * self.g / self.cstar_ideal
+        self.thrust_coefficient_vaccum_ideal = self.isp_vaccuum_ideal * cs.g / self.cstar_ideal'''
 
 
     def generate_chamber_geometry(self, points=100):
@@ -238,7 +327,7 @@ class TCA(Component):
 
     def throat_area(self):
         self.validate_config()
-        return np.pi * self.throat_radius**2
+        return np.pi * self.throat_radius**2 # in^2
 
     def injector_area(self):
         return self.throat_area() * self.contraction_ratio
@@ -284,26 +373,17 @@ class TCA(Component):
 
 
 if __name__ == "__main__":
-    # Instantiate components with lowercase names
+
     tca = TCA("Heatsink")
     injector = Component("Coax")
 
-    injector_output = injector.add_output("TCA Inputs")
+    injector.add_output("TCA Inputs")
     injector.manual_connect("TCA Inputs", tca, "Injector Data")
+    injector.fuel = 'RP-1'
+    injector.oxidizer = 'LOX'
 
+    #print(tca)
 
-    print(tca)
-    print(injector)
-
-    data = {"Chamber Pressure (psia)": 400,
-            "Fuel Mass Flow Rate (kg/s)": 1.5,
-            "Oxidizer Mass Flow Rate (kg/s)": 3,
-            "Fuel Temperature (K)": 295.15,
-            "Oxidizer Temperature (K)": 90,
-            "Fuel": "RP-1",
-            "Oxidizer": "LOX"}
-    injector_output.transmit(data)
-    tca.receive("Injector Data")
 
     config = {'Number of Points Contour': 400,
               "Nozzle Type": "Bell",
@@ -323,9 +403,18 @@ if __name__ == "__main__":
               "Ambient Pressure (psia)": 14.7,
               "Combustor Area": "Finite"}
     
+    guess = {'Chamber Pressure (psia)': 400,
+             'Mixture Ratio': 2,
+             "Fuel Temperature (K)": 298.15,
+             "Oxidizer Temperature (K)": 90}
+    
+    tca.set_guess(guess)
     tca.set_config(config)
-    tca.ODE()
-    #print(tca.cstar_ideal)
+    tca.validate_guess()
+
+    #print(tca.injector_data.connected_ports[0].component.fuel)
+
+    #tca.get_mdot()
 
 
 

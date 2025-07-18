@@ -1,4 +1,5 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Optional, Dict, Any
 from Port import InputPort, OutputPort
 
 class Component:
@@ -7,66 +8,78 @@ class Component:
         self.inputs = {}
         self.outputs = {}
 
+
     def add_input(self, port_name: str):
-        port = InputPort(name=port_name, component=self.name)
+        port = InputPort(name=port_name, component=self)
         self.inputs[port_name] = port
         return port
 
     def add_output(self, port_name: str):
-        port = OutputPort(name=port_name, component=self.name)
+        port = OutputPort(name=port_name, component=self)
         self.outputs[port_name] = port
         return port
 
-    # Sets the port value
-    def receive(self, port_name: str):
-        return self.inputs[port_name].receive()
-
-    # Sets what value to send
-    def transmit(self, port_name: str, value):
-        self.outputs[port_name].transmit(value)
 
     def connect_to_input(self, other: "Component"):
         for out_name, out_port in self.outputs.items():
-            match = other.inputs.get(out_name)
-            if match:
-                out_port.connect(match)
-                print(f"[Connected] {self.name}: {out_name} → {other.name}: {match.name}")
-            else:
-                print(f"[Warning] No input port for output '{out_name}' in '{other.name}'")
+            inp_port = other.inputs.get(out_name)
+            if inp_port:
+                out_port.connect(inp_port)
+                print(f"[Connected] {self.name}: {out_name} → {other.name}: {out_name}")
+        self.on_connect()
 
-    def manual_connect(self, output_port: str, input_component: "Component", input_port: str):
-        out = self.outputs.get(output_port)
-        inp = input_component.inputs.get(input_port)
-
+    def manual_connect(self, output_name: str, input_comp: "Component", input_name: str):
+        out = self.outputs.get(output_name)
+        inp = input_comp.inputs.get(input_name)
         if out and inp:
             out.connect(inp)
-            print(f"[Connected] {self.name}: {output_port} → {input_component.name}: {input_port}")
-        else:
-            print(f"[Error] Could not connect {output_port} to {input_port}")
+            print(f"[Connected] {self.name}: {output_name} → {input_comp.name}: {input_name}")
+        self.on_connect()
+
+    #def on_connect(self):
+    #    return
 
     def __repr__(self):
-        def port_str(port, arrow, default="None"):
-            return f"{port.name} {arrow} {port.connected_port.component} as {port.connected_port.name}" if port.connected_port else f"{port.name} {arrow} {default}"
+        def format_input(name, port):
+            if port.is_connected():
+                conns = ", ".join(f"{p.name} in {p.component.name}" for p in port.connected_ports)
+                return f"{name} ← {conns}"
+            else:
+                return f"{name} ← None"
 
-        inputs_str = "\n    ".join(port_str(p, "←") for p in self.inputs.values()) or "    None"
-        outputs_str = "\n    ".join(port_str(p, "→") for p in self.outputs.values()) or "    None"
+        def format_output(name, port):
+            if port.is_connected():
+                conns = ", ".join(f"{p.name} in {p.component.name}" for p in port.connected_ports)
+                return f"{name} → {conns}"
+            else:
+                return f"{name} → None"
 
-        return f"* {self.name}\n  Inputs:\n    {inputs_str}\n  Outputs:\n    {outputs_str}"
+        inputs = "\n    ".join(format_input(name, port) for name, port in self.inputs.items()) or "    None"
+        outputs = "\n    ".join(format_output(name, port) for name, port in self.outputs.items()) or "    None"
+
+        return f"* {self.name}\n  Inputs:\n    {inputs}\n  Outputs:\n    {outputs}"
 
 
 if __name__ == "__main__":
 
-    A = Component("Tank")
-    B = Component("Engine")
-    C = Component("COPV")
+    tca = Component("Heatsink")
+    injector = Component("Coax")
 
-    TankOut = A.add_output("tank Data")
-    TankIn = A.add_input("Pressure Data")
-    EngineIn = B.add_input("Tank Data")
-    COPVOut = C.add_output("COPV Data")
+    inj_out = injector.add_output("TCA Data")
+    tca_in = tca.add_input("Injector Data")
+    inj_out_2 = injector.add_output("Extra Data")
 
-    A.connect_to_input(B)
-    C.manual_connect("COPV Data", A, "Pressure Data")
+    injector.manual_connect("TCA Data", tca, "Injector Data")
+    injector.manual_connect("Extra Data", tca, "Injector Data")
 
-    print(A)
-    print(B)
+    #print(tca)
+    #print(injector)
+
+    inj_out.component.pressure = 6
+    tca_in.component.pressure = 10
+
+    print(inj_out.component.pressure)
+    #print(tca.pressure)
+    #print(injector.pressure)
+
+
