@@ -1,68 +1,73 @@
 from dataclasses import dataclass, field
-from typing import Optional, List, TYPE_CHECKING
+from typing import Optional, List, Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from Component import Component
 
+class SharedPortValue:
+    def __init__(self):
+        self.value = None
+        self.subscribers = []
 
-@dataclass
-class Port:
-    name: str
-    component: "Component"
+    def subscribe(self, port: "BasePort"):
+        if port not in self.subscribers:
+            self.subscribers.append(port)
+            port._value = self
 
-    def is_connected(self) -> bool:
-        raise NotImplementedError("Implemented in subclasses")
+    def broadcast(self, value):
+        if self.value is not None and self.value != value:
+            print(f"[Warning] Overriding existing shared value: {self.value} → {value}")
+        self.value = value
+        for port in self.subscribers:
+            port.on_value_changed(value)
 
-    def __repr__(self):
-        raise NotImplementedError("Use __repr__ in InputPort or OutputPort")
+    def merge(self, other: "SharedPortValue"):
+        if self is other:
+            return
+
+        if self.value is not None and other.value is not None and self.value != other.value:
+            print(f"[Warning] Conflicting values during merge: keeping {other.value}, overwriting {self.value}")
+
+        if other.value is not None:
+            self.value = other.value
+
+        for port in other.subscribers:
+            self.subscribe(port)
+
+        self.broadcast(self.value)
 
 
-@dataclass
-class InputPort(Port):
-    connected_ports: List["OutputPort"] = field(default_factory=list, init=False)
+class BasePort:
+    def __init__(self, name: str, component: "Component"):
+        self.name = name
+        self.component = component
+        self._value = SharedPortValue()
+        self._value.subscribe(self)
+        self.connected_ports: list["BasePort"] = []
+
+    def connect(self, other: "BasePort"):
+        # Always merge values, ensuring all ports share one SharedPortValue
+        self._value.merge(other._value)
+        self.connected_ports.append(other)
+        other.connected_ports.append(self)
 
     @property
-    def connected_components(self) -> List["Component"]:
-        return [f"{p.component.name}" for p in self.connected_ports]
+    def value(self):
+        return self._value.value if self._value else None
 
-    def connect(self, output: "OutputPort"):
-        if not isinstance(output, OutputPort):
-            raise TypeError("InputPort must connect to OutputPort.")
-        if output not in self.connected_ports:
-            self.connected_ports.append(output)
-        if self not in output.connected_ports:
-            output.connected_ports.append(self)
+    @value.setter
+    def value(self, val):
+        self._value.broadcast(val)
 
-    def is_connected(self) -> bool:
+    def is_connected(self):
         return len(self.connected_ports) > 0
 
-    def __repr__(self):
-        if self.is_connected():
-            conns = ", ".join(f"{p.component.name}.{p.name}" for p in self.connected_ports)
-            return f"{self.component.name}.{self.name} ← {conns}"
-        else:
-            return f"{self.component.name}.{self.name} ← None"
+    def on_value_changed(self, val):
+        pass  # hook for extension
 
 
-@dataclass
-class OutputPort(Port):
-    connected_ports: List[InputPort] = field(default_factory=list, init=False)
+class InputPort(BasePort):
+    pass
 
-    @property
-    def connected_components(self) -> List["Component"]:
-        return [f"{p.component.name}" for p in self.connected_ports]
-
-    def connect(self, input_port: "InputPort"):
-        if not isinstance(input_port, InputPort):
-            raise TypeError("OutputPort must connect to InputPort.")
-        input_port.connect(self)
-
-    def is_connected(self) -> bool:
-        return len(self.connected_ports) > 0
-
-    def __repr__(self):
-        if self.is_connected():
-            conns = ", ".join(f"{p.component.name}.{p.name}" for p in self.connected_ports)
-            return f"{self.component.name}.{self.name} → {conns}"
-        else:
-            return f"{self.component.name}.{self.name} → None"
+class OutputPort(BasePort):
+    pass

@@ -7,6 +7,15 @@ class PortNotConnectedError(Exception):
 #class NoInjectorError(Exception):
 #    pass
 
+class NoMatchingPortsError(Exception):
+    pass
+
+class PortTypeError(Exception):
+    pass
+
+class AmbiguousPortError(Exception):
+    pass
+
 class MissingConfigurationKeyError(KeyError):
     pass
 
