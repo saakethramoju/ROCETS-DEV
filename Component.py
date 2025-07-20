@@ -3,21 +3,43 @@ from Port import InputPort, OutputPort
 from prettytable import PrettyTable
 from Exceptions import (
     PortNotConnectedError, PortTypeError, AmbiguousPortError, NoMatchingPortsError,
-    MissingGuessError, MissingGuessKeyError, MissingGuessValueError
+    MissingGuessError, MissingGuessKeyError, MissingGuessValueError, GuessResidualMismatchError,
+    MissingConfigurationError, MissingConfigurationKeyError, MissingConfigurationValueError,
+    InvalidGuessKeyError
 )
 import re
 import numpy as np
 
 
 class Component:
-    def __init__(self, name: str):
+
+    required_keys = []
+    optional_keys = []
+
+    num_expected_residuals = 1
+
+    def __init__(self, name: str, config: Optional[dict] = None, guess: Optional[dict] = None):
         self.name = name
         self.inputs: Dict[str, InputPort] = {}
         self.outputs: Dict[str, OutputPort] = {}
         self.required_inputs: Dict[str, InputPort] = {}
         self.required_outputs: Dict[str, OutputPort] = {}
-        self.guess: Optional[dict] = None
-        self.num_expected_residuals = 1
+
+        self.configuration: Optional[dict] = config
+        self.guess: Optional[dict] = guess
+
+
+        if config:
+            self.set_config(config)
+
+            
+    def validate_all(self):
+        self._propagate_iteration_variable_flags()
+        self._propagate_guess_variable_flags()
+        self.validate_config()
+        self.validate_guess()
+        self.validate_connections_and_iteration_sources()
+
 
     # ─────────────────────────────────────────────────────────────────────────────
     # PORT MANAGEMENT
@@ -50,15 +72,47 @@ class Component:
             if port.guess_variable
         ]
 
-    def validate_required_connections(self):
-        """Ensure all required ports are connected, raise error if any are missing."""
-        missing = [
-            f"Input: {name}" for name, port in self.required_inputs.items() if not port.is_connected()
-        ] + [
-            f"Output: {name}" for name, port in self.required_outputs.items() if not port.is_connected()
-        ]
-        if missing:
-            raise PortNotConnectedError(f"{self.name} is missing connections for: {', '.join(missing)}")
+
+    def validate_connections_and_iteration_sources(self):
+        """
+        Validate:
+        1. All required input/output ports are connected.
+        2. All iteration variables are either guess variables or connected to a source.
+        """
+        missing_required = []
+        missing_iteration_sources = []
+
+        # Check required port connections
+        for name, port in self.required_inputs.items():
+            if not port.is_connected():
+                missing_required.append(f"Input: {name}")
+
+        for name, port in self.required_outputs.items():
+            if not port.is_connected():
+                missing_required.append(f"Output: {name}")
+
+        # Check iteration variable sources
+        for name, port in {**self.inputs, **self.outputs}.items():
+            if port.iteration_variable:
+                if not port.guess_variable and not port.is_connected():
+                    missing_iteration_sources.append(name)
+
+        # Raise detailed error if any problems found
+        error_msgs = []
+        if missing_required:
+            error_msgs.append(
+                "Missing required connections:\n  - " + "\n  - ".join(missing_required)
+            )
+        if missing_iteration_sources:
+            error_msgs.append(
+                "Iteration variables without guess or connection:\n  - " + "\n  - ".join(missing_iteration_sources)
+            )
+
+        if error_msgs:
+            raise PortNotConnectedError(f"{self.name} has unresolved port issues:\n" + "\n\n".join(error_msgs))
+
+        return True
+
 
     # ─────────────────────────────────────────────────────────────────────────────
     # CONNECTION LOGIC
@@ -124,29 +178,43 @@ class Component:
     # GUESS HANDLING
     # ─────────────────────────────────────────────────────────────────────────────
 
+    def set_config(self):
+        print("[Warning!] No present configuration")
+        pass
+
     def assign_guess_variables(self, priority: Optional[List[str]] = None):
-        """Assign guess_variable flags to iteration variables based on residual count and priority."""
+        """
+        Assign guess_variable flags to iteration variables, trimming the number to match residuals.
+        Priority determines selection order.
+        """
         num = self.num_residuals()
         candidates = {
             name: port for name, port in {**self.inputs, **self.outputs}.items()
             if port.iteration_variable
         }
 
+        if len(candidates) < num:
+            raise GuessResidualMismatchError(num_guess_vars=len(candidates), num_residuals=num)
+
         if priority:
-            priority = [self._normalize(p) for p in priority]
+            priority_norm = [self._normalize(p) for p in priority]
             sorted_ports = sorted(
                 candidates.items(),
-                key=lambda item: priority.index(self._normalize(item[0])) if self._normalize(item[0]) in priority else float("inf")
+                key=lambda item: priority_norm.index(self._normalize(item[0]))
+                if self._normalize(item[0]) in priority_norm else float("inf")
             )
         else:
             sorted_ports = list(candidates.items())
 
+        # Reset all first
         for _, port in candidates.items():
             port.guess_variable = False
 
-        for i, (_, port) in enumerate(sorted_ports):
+        # Enable only top N guess variables
+        for i, (name, port) in enumerate(sorted_ports):
             if i < num:
                 port.guess_variable = True
+
 
     def set_guess(self, guess: dict):
         """Set initial guess values for ports using normalized key matching."""
@@ -158,20 +226,48 @@ class Component:
                     self[name] = val
                     break
         return True
-
+    
+    
     def validate_guess(self):
-        """Ensure all required guess values for iteration variables are provided and non-None."""
+        """
+        Ensure all required guess values for guess variables are provided, non-None,
+        and no unexpected guess keys are included.
+        """
         if not self.guess:
             raise MissingGuessError(f"Initial guesses not provided for {self.name}")
 
-        guess_keys = {self._normalize(k): k for k in self.guess}
+        # Normalize provided guess keys
+        guess_keys_normalized = {self._normalize(k): k for k in self.guess}
+        provided_normalized_keys = set(guess_keys_normalized.keys())
+
+        # Determine required guess keys based on ports
+        required_normalized_keys = set()
         for name, port in {**self.inputs, **self.outputs}.items():
-            if port.iteration_variable:
-                norm = self._normalize(name)
-                if norm not in guess_keys:
-                    raise MissingGuessKeyError(f"Missing required initial guess key: '{name}'")
-                if self.guess[guess_keys[norm]] is None:
-                    raise MissingGuessValueError(f"Initial guess value for '{name}' cannot be None")
+            if port.guess_variable:
+                required_normalized_keys.add(self._normalize(name))
+        # Check for missing required keys
+        missing_keys = required_normalized_keys - provided_normalized_keys
+        if missing_keys:
+            missing_originals = [name for norm, name in guess_keys_normalized.items() if norm in missing_keys]
+            raise MissingGuessKeyError(
+                f"Missing required initial guess key(s) for {self.name}: {missing_keys}"
+            )
+
+        # Check for extra unexpected keys
+        extra_keys = provided_normalized_keys - required_normalized_keys
+        if extra_keys:
+            extra_originals = [guess_keys_normalized[k] for k in extra_keys]
+            raise InvalidGuessKeyError(
+                f"Unexpected guess key(s) in {self.name}: {extra_originals}. "
+                f"Expected only: {[self._denormalize(k) for k in required_normalized_keys]}"
+            )
+
+        # Check for None values
+        for norm_key in required_normalized_keys:
+            original_key = guess_keys_normalized[norm_key]
+            if self.guess[original_key] is None:
+                raise MissingGuessValueError(f"Initial guess value for '{original_key}' cannot be None")
+
         return True
 
     def set_guess_variables(self, names: List[str]):
@@ -180,16 +276,40 @@ class Component:
 
         All other iteration_variables will be deactivated from the guess set.
 
-        Parameters:
+        Parameters
         ----------
         names : List[str]
             List of port names to be used as guess variables.
             Matching is fuzzy using normalized names.
+
+        Raises
+        ------
+        InvalidGuessVariableError if any name is not a valid iteration variable.
         """
+        from Exceptions import InvalidGuessVariableError
+
         norm_names = [self._normalize(n) for n in names]
+
+        # Build set of all valid normalized iteration variable names
+        valid_vars = {
+            self._normalize(name): name
+            for name, port in {**self.inputs, **self.outputs}.items()
+            if port.iteration_variable
+        }
+
+        # Check for any invalid names
+        invalid = [name for name in norm_names if name not in valid_vars]
+        if invalid:
+            raise InvalidGuessVariableError(
+                invalid_names=invalid,
+                valid_names=list(valid_vars.values())
+            )
+
+        # Apply toggles
         for name, port in {**self.inputs, **self.outputs}.items():
             if port.iteration_variable:
                 port.guess_variable = self._normalize(name) in norm_names
+
 
     def toggle_guess_variable(self, name: str, enable: bool = True):
         """
@@ -239,6 +359,33 @@ class Component:
                 port.value = vec[i]
                 i += 1
 
+    def _propagate_iteration_variable_flags(self):
+        """Ensure all ports in a shared node inherit the iteration_variable flag."""
+        seen = set()
+        for port in {**self.inputs, **self.outputs}.values():
+            shared = port._value
+            if shared in seen:
+                continue
+            seen.add(shared)
+            flag = any(p.iteration_variable for p in shared.subscribers)
+            for p in shared.subscribers:
+                p.iteration_variable = flag
+
+    def _propagate_guess_variable_flags(self):
+        """Ensure guess_variable flags are consistent across shared iteration nodes."""
+        seen = set()
+        for port in {**self.inputs, **self.outputs}.values():
+            shared = port._value
+            if shared in seen:
+                continue
+            seen.add(shared)
+            if not any(p.iteration_variable for p in shared.subscribers):
+                continue
+            flag = any(p.guess_variable for p in shared.subscribers)
+            for p in shared.subscribers:
+                if p.iteration_variable:
+                    p.guess_variable = flag
+
     # ─────────────────────────────────────────────────────────────────────────────
     # NORMALIZATION, ACCESS, RESIDUALS
     # ─────────────────────────────────────────────────────────────────────────────
@@ -260,6 +407,56 @@ class Component:
 
     def __setitem__(self, port_name: str, value: Any):
         self._resolve_port(port_name).value = value
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # CONFIGURATION HANDLING
+    # ─────────────────────────────────────────────────────────────────────────────
+
+
+    def set_config(self, config: dict):
+        """Store and normalize config keys, while standardizing string values."""
+        self.configuration = config
+        self._normalized_config = self._normalize_config_dict(config)
+
+    def _normalize_config_dict(self, config: dict) -> dict:
+        """
+        Normalize config keys and pre-process values.
+        Keys are normalized for lookup.
+        String values are trimmed.
+        """
+        return {
+            self._normalize(k): (k, self._clean_config_value(v))
+            for k, v in config.items()
+        }
+
+    def _clean_config_value(self, v):
+        """Clean user-provided value (e.g., trim strings, normalize case where applicable)."""
+        if isinstance(v, str):
+            cleaned = v.strip()
+            # Only lowercase values for known case-sensitive keys
+            if "nozzle type" in cleaned.lower() or "combustor area" in cleaned.lower():
+                return cleaned.lower()
+            return cleaned
+        return v
+
+    def _lookup_config_value(self, key: str, condition: bool = True):
+        """Lookup value in normalized config, respecting condition."""
+        norm = self._normalize(key)
+        original, val = self._normalized_config.get(norm, (None, None))
+        return val if condition else None
+
+    def validate_config(self):
+        """Validate required config keys are present and non-null."""
+        if not self.configuration:
+            raise MissingConfigurationError(f"No configuration provided for {self.name}")
+
+        for key in self.required_keys:
+            norm = self._normalize(key)
+            if norm not in self._normalized_config:
+                raise MissingConfigurationKeyError(f"Missing required key: '{key}'")
+            original_key, value = self._normalized_config[norm]
+            if value is None:
+                raise MissingConfigurationValueError(f"Key '{original_key}' is present but has value None")
 
 
     # ─────────────────────────────────────────────────────────────────────────────
@@ -337,7 +534,7 @@ class Component:
         Define the residuals for this component.
         Subclasses should override this to return a list of residual expressions.
         """
-        return [1.0]  # default placeholder residual
+        return []  # default placeholder residual
 
     def num_residuals(self) -> int:
         """
@@ -347,9 +544,9 @@ class Component:
         self._num_residuals = len(self.residuals())
         return self._num_residuals
 
-    def on_steady_state_solve(self):
+    def on_steady_state_solve(self, solution):
         """Optional hook to run after steady-state solver succeeds."""
-        print(f"Solver done for {self.name}")
+        pass
 
 if __name__ == "__main__":
 

@@ -4,25 +4,45 @@ from scipy.interpolate import interp1d
 from Component import Component
 from Constants import Constants as cs
 from rocketcea.cea_obj_w_units import CEA_Obj
-import re
+
 from Exceptions import (
-    MissingConfigurationError, MissingConfigurationValueError, MissingConfigurationKeyError,
-)
+    MissingGuessError, MissingConfigurationValueError, MissingConfigurationKeyError,
+    GuessResidualMismatchError, SteadyStateSolveError, MissingMixtureRatioError,
+    )
 
 
 class TCA(Component):
-    def __init__(self, name: str, config: Optional[dict] = None, guess: Optional[dict] = None):
-        super().__init__(name)
-        self.configuration = config
-        self.guess = guess
 
-        self.num_expected_residuals = 1 # Change as needed
+    required_keys = [
+        "Contour Points",
+        "Nozzle Type",
+        "Throat Radius (in)",
+        "Chamber Length (in)",
+        "Contraction Ratio",
+        "Convergence Half-Angle (°)",
+        "Convergence Radius Factor",
+        "Lead-in Radius Factor",
+        "Lead-out Radius Factor",
+        "Expansion Ratio",
+        "Ambient Pressure (psia)",
+        "Combustor Area"
+    ]
+
+    optional_keys = [
+        "Divergence Half-Angle (°)",  # conical
+        "Divergence Entrance Angle (°)",
+        "Divergence Exit Angle (°)",
+        "Percent Bell (%)"  # bell
+    ]
+
+    all_config_keys = required_keys + optional_keys
+
+    num_expected_residuals = 1
+
+    def __init__(self, name: str, config: Optional[dict] = None, guess: Optional[dict] = None):
+        super().__init__(name, config=config, guess=guess)
 
         self._initialize_default_ports()
-
-        if config:
-            self.set_config(config)
-
         # Automatically assign guess variables based on residuals and priority
         self.assign_guess_variables(priority=[
             "Chamber Pressure (psia)",
@@ -31,12 +51,14 @@ class TCA(Component):
             "Oxidizer Temperature (K)"
         ])
 
+
     # ─────────────────────────────────────────────────────────────────────────────
     # PORT SETUP / CONFIGURATION
     # ─────────────────────────────────────────────────────────────────────────────
 
     def _initialize_default_ports(self):
         """Define all input ports expected for the TCA model."""
+        # INPUTS:
         self.add_input("Chamber Pressure (psia)", required=True, iteration_variable=True)
         self.add_input("Mixture Ratio", required=True, iteration_variable=True)
         self.add_input("Fuel Temperature (K)", required=True, iteration_variable=True)
@@ -45,77 +67,74 @@ class TCA(Component):
         self.add_input("Oxidizer", required=True)
         self.add_input("Fuel", required=True)
 
+        # OUTPUTS:
+
+
     def set_config(self, config: dict):
-        """Read and normalize configuration keys from user dictionary."""
-        self.configuration = config
-        normalized_config = {self._normalize(k): (k, v) for k, v in config.items()}
+        """Parse TCA-specific config after base normalization."""
+        super().set_config(config)
 
-        def lookup(key, condition=True):
-            norm = self._normalize(key)
-            original, val = normalized_config.get(norm, (None, None))
-            return val if condition else None
+        # Normalize nozzle type and combustor area
+        raw_nozzle_type = self._lookup_config_value("Nozzle Type")
+        raw_combustor_area = self._lookup_config_value("Combustor Area")
 
-        nozzle_type = lookup("Nozzle Type")
-        combustor_area = lookup("Combustor Area")
+        self.nozzle_type = raw_nozzle_type.lower().strip() if isinstance(raw_nozzle_type, str) else ""
+        self.combustor_area = raw_combustor_area.strip() if isinstance(raw_combustor_area, str) else raw_combustor_area
 
-        self.contour_points    = lookup("Number of Points Contour")
-        self.nozzle_type       = nozzle_type.lower() if nozzle_type else ""
-        self.throat_radius     = lookup("Throat Radius (in)")
-        self.chamber_length    = lookup("Chamber Length (in)")
-        self.contraction_ratio = lookup("Contraction Ratio")
-        self.theta_c           = lookup("Convergence Half-Angle (°)")
-        self.rc_rt             = lookup("Convergence Radius Factor")
-        self.rtc_rt            = lookup("Lead-in Radius Factor")
-        self.rtd_rt            = lookup("Lead-out Radius Factor")
-        self.expansion_ratio   = lookup("Expansion Ratio")
-        #self.exit_pressure     = lookup("Exit Pressure (psia)")
-        self.ambient_pressure  = lookup("Ambient Pressure (psia)")
-        self.alpha             = lookup("Divergence Half-Angle (°)", self.nozzle_type == "conical")
-        self.theta_n           = lookup("Divergence Entrance Angle (°)", self.nozzle_type == "bell")
-        self.theta_e           = lookup("Divergence Exit Angle (°)", self.nozzle_type == "bell")
-        self.percent_bell      = lookup("Percent Bell (%)", self.nozzle_type == "bell")
-        self.combustor_area    = combustor_area
-        return True
+        self.contour_points    = self._lookup_config_value("Number of Points Contour")
+        self.throat_radius     = self._lookup_config_value("Throat Radius (in)")
+        self.chamber_length    = self._lookup_config_value("Chamber Length (in)")
+        self.contraction_ratio = self._lookup_config_value("Contraction Ratio")
+        self.theta_c           = self._lookup_config_value("Convergence Half-Angle (°)")
+        self.rc_rt             = self._lookup_config_value("Convergence Radius Factor")
+        self.rtc_rt            = self._lookup_config_value("Lead-in Radius Factor")
+        self.rtd_rt            = self._lookup_config_value("Lead-out Radius Factor")
+        self.expansion_ratio   = self._lookup_config_value("Expansion Ratio")
+        self.ambient_pressure  = self._lookup_config_value("Ambient Pressure (psia)")
+        self.alpha             = self._lookup_config_value("Divergence Half-Angle (°)", self.nozzle_type == "conical")
+        self.theta_n           = self._lookup_config_value("Divergence Entrance Angle (°)", self.nozzle_type == "bell")
+        self.theta_e           = self._lookup_config_value("Divergence Exit Angle (°)", self.nozzle_type == "bell")
+        self.percent_bell      = self._lookup_config_value("Percent Bell (%)", self.nozzle_type == "bell")
+
 
     def validate_config(self):
         """Ensure all required configuration keys are present and non-null."""
-        if not self.configuration:
-            raise MissingConfigurationError(f"No configuration provided for {self.name}")
+        super().validate_config()
 
-        normalized_config = {self._normalize(k): (k, v) for k, v in self.configuration.items()}
-
-        required_keys = [
-            "Number of Points Contour", "Nozzle Type", "Throat Radius (in)",
-            "Chamber Length (in)", "Contraction Ratio", "Convergence Half-Angle (°)",
-            "Convergence Radius Factor", "Lead-in Radius Factor", "Lead-out Radius Factor",
-            "Expansion Ratio", "Ambient Pressure (psia)", "Combustor Area"
-        ]
-
-        for key in required_keys:
-            norm = self._normalize(key)
-            if norm not in normalized_config or normalized_config[norm][1] is None:
-                raise MissingConfigurationKeyError(f"Missing or None value for key: '{key}'")
-
+        # TCA-specific conditional validation based on normalized nozzle_type
         if self.nozzle_type == "conical":
             key = "Divergence Half-Angle (°)"
-            if self._normalize(key) not in normalized_config or normalized_config[self._normalize(key)][1] is None:
-                raise MissingConfigurationKeyError(f"Missing or None value for required conical key: '{key}'")
+            norm = self._normalize(key)
+            if norm not in self._normalized_config:
+                raise MissingConfigurationKeyError(f"Missing required conical key: '{key}'")
+            _, value = self._normalized_config[norm]
+            if value is None:
+                raise MissingConfigurationValueError(f"Conical key '{key}' is present but has value None")
 
         elif self.nozzle_type == "bell":
             for key in ["Divergence Entrance Angle (°)", "Divergence Exit Angle (°)", "Percent Bell (%)"]:
                 norm = self._normalize(key)
-                if norm not in normalized_config or normalized_config[norm][1] is None:
-                    raise MissingConfigurationKeyError(f"Missing or None value for required bell key: '{key}'")
-
-        return True
+                if norm not in self._normalized_config:
+                    raise MissingConfigurationKeyError(f"Missing required bell key: '{key}'")
+                _, value = self._normalized_config[norm]
+                if value is None:
+                    raise MissingConfigurationValueError(f"Bell key '{key}' is present but has value None")
 
     # ─────────────────────────────────────────────────────────────────────────────
     # PERFORMANCE CALCULATION
     # ─────────────────────────────────────────────────────────────────────────────
+    
+    def get_mixture_ratio(self):
+        val = self["Mixture Ratio"]
+        if val is None:
+            raise MissingMixtureRatioError("Please specficy a valid mixture ratio!")
+        return val
+
 
     def generate_cea(self):
         """Create a CEA Object and calculate Rayleigh-corrected chamber pressure."""
         Pc = self["Chamber Pressure (psia)"]
+        mr = self.get_mixture_ratio()
         if self.combustor_area.lower() == 'finite':
             cea = CEA_Obj(
                 oxName=self["Oxidizer"], fuelName=self["Fuel"], temperature_units='degK',
@@ -123,7 +142,7 @@ class TCA(Component):
                 sonic_velocity_units='m/s', enthalpy_units='J/kg',
                 density_units='kg/m^3', fac_CR=self.contraction_ratio
             )
-            self.chamber_pressure_rayleigh = Pc / cea.get_Pinj_over_Pcomb(Pc, self['Mixture Ratio'], self.contraction_ratio)
+            self.chamber_pressure_rayleigh = Pc / cea.get_Pinj_over_Pcomb(Pc, mr, self.contraction_ratio)
         else:
             cea = CEA_Obj(
                 oxName=self["Oxidizer"], fuelName=self["Fuel"], temperature_units='degK',
@@ -138,10 +157,11 @@ class TCA(Component):
 
     def mdot(self):
         """Compute total mass flow rate in kg/s from throat area and thermodynamic properties."""
+        mr = self.get_mixture_ratio()
         At = self.throat_area()
         cea = self.generate_cea()
-        _, Tt, _ = cea.get_Temperatures(self.chamber_pressure_rayleigh, self["Mixture Ratio"])
-        mwt, gammat = cea.get_Throat_MolWt_gamma(self.chamber_pressure_rayleigh, self["Mixture Ratio"])
+        _, Tt, _ = cea.get_Temperatures(self.chamber_pressure_rayleigh, mr)
+        mwt, gammat = cea.get_Throat_MolWt_gamma(self.chamber_pressure_rayleigh, mr)
         return (At * self.chamber_pressure_rayleigh * 4.44822) * np.sqrt(mwt * gammat / (cs.R * Tt))
     
     def thrust(self):
@@ -300,6 +320,11 @@ class TCA(Component):
         """Define the residuals for the TCA model."""
         if not self.configuration:
             return [1.0] * self.num_expected_residuals # placeholder for early assignment
+        
+        if not self.guess:
+            raise MissingGuessError("No guess input provided!")
+
+        self.validate_all() # make sure config is set, guess is set, and all ports are connected
 
         try:
             mdot_residual = self["Injector Mass Flow Rate (kg/s)"] - self.mdot()
@@ -310,12 +335,15 @@ class TCA(Component):
 
     def tca_residual_function(self, x):
         self.set_guess_vector(x)
-        return self.residuals()
+        res = self.residuals()
+        if len(x) != len(res):
+            raise GuessResidualMismatchError(len(x), len(res))
+        return res
     
 
     def on_steady_state_solve(self, solution=None):
         """Run post-solve logic such as geometry generation."""
-        tca.set_guess_vector(solution.x)
+        self.set_guess_vector(solution.x)
         print(self.thrust())
         pass
 
@@ -342,9 +370,9 @@ if __name__ == "__main__":
     #injector.manual_connect("Oxidizer Manifold Temperature (K)", thermocouple, "Temperature Reading") # just to check in manual still works
 
     injector["Chamber Pressure (psia)"] = None
-    injector["mixture ratio"] = None
-    injector["Fuel Temperature"] = None
-    injector["Oxidizer temperature"] = None
+    injector["mixture ratio"] = 2.3
+    injector["Fuel Temperature"] = 298.15
+    injector["Oxidizer temperature"] = 90
     injector["Oxidizer "] = 'LOX'
     injector['Fuel'] = 'RP-1'
     injector['injector Mass Flow Rate'] = 5
@@ -352,10 +380,11 @@ if __name__ == "__main__":
     tca.connect(injector)
 
 
-    print(tca)
-    print(injector)
+    #print(tca)
+    #print(injector)
+    #tca.print_iteration_variable_table()
 
-    config = {'Number of Points Contour': 400,
+    config = {'Contour Points': 400,
               "Nozzle Type": "Bell",
               "Throat Radius (in)": 1.2,
               "Chamber Length (in)": 7.9,
@@ -372,41 +401,30 @@ if __name__ == "__main__":
               "Ambient Pressure (psia)": 14.7,
               "Combustor Area": "Finite"}
     
-    guess = {'Chamber Pressure (psia)': 300,
-             'Mixture Ratio': 2,
-             "Fuel Temperature (K)": 298.15,
-             "Oxidizer Temperature (K)": 90}
+    guess = {'Chamber Pressure (psia)': 300,}
+            # 'Mixture Ratio': 2,
+            # "Fuel Temperature (K)": 298.15,
+            # "Oxidizer Temperature (K)": 90}
     
 
     tca.set_config(config)
-    tca.validate_config()
-
     tca.set_guess(guess)
-    tca.validate_guess()
-
-
+    tca.print_iteration_variable_table()
+    #tca.toggle_guess_variable("Chamber Pressure", enable=False)
+    #tca.toggle_guess_variable("Mixture Ratio")
+    #tca.set_guess_variables(["Mixture Ratio"])
+    
     solution = root(tca.tca_residual_function, tca.get_guess_vector())
 
     if solution.success:
-        print("Solver converged:", solution.message)
+        print(solution.message)
         tca.on_steady_state_solve(solution)
     else:
-        print("Solver failed:", solution.message)
-        raise RuntimeError("Newton-Raphson solver did not converge.")
-    
-
-    #print(tca)
-    #print(injector)
-
-    '''
-    #tca.print_iteration_variable_table()
-
-    #tca.set_guess_variables(["chamber pressure", "mixture ratio"])
-    #tca.toggle_guess_variable("chamber pressure", enable=False)
-    #tca.toggle_guess_variable("mixture ratio")
-    tca.print_iteration_variable_table()
-    print(tca.get_guess_vector())
-    tca.set_guess_vector([310, 2.3])
-    tca.print_iteration_variable_table()'''
+        guess_var_names = tca.get_guess_variables()
+        raise SteadyStateSolveError(
+            component_name=tca.name,
+            message=solution.message,
+            guess_vars=guess_var_names
+        )
 
     
