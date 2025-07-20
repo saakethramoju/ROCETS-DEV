@@ -324,7 +324,6 @@ class TCA(Component):
         if not self.guess:
             raise MissingGuessError("No guess input provided!")
 
-        self.validate_all() # make sure config is set, guess is set, and all ports are connected
 
         try:
             mdot_residual = self["Injector Mass Flow Rate (kg/s)"] - self.mdot()

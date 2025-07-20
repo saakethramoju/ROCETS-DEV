@@ -32,12 +32,11 @@ class Component:
         if config:
             self.set_config(config)
 
-            
-    def validate_all(self):
+    def validate_all(self, seen_nodes=None):
+        self.validate_config()
+        self.validate_guess(seen_nodes=seen_nodes)
         self._propagate_iteration_variable_flags()
         self._propagate_guess_variable_flags()
-        self.validate_config()
-        self.validate_guess()
         self.validate_connections_and_iteration_sources()
 
 
@@ -62,16 +61,16 @@ class Component:
         return port
 
     def get_iteration_variables(self) -> List[str]:
-        """Return a list of port names marked as iteration variables."""
-        return [name for name, port in {**self.inputs, **self.outputs}.items() if port.iteration_variable]
-    
+        return [
+            name for name, port in {**self.inputs, **self.outputs}.items()
+            if port.iteration_variable
+        ]
+
     def get_guess_variables(self) -> List[str]:
-        """Return a list of port names marked as guess variables."""
         return [
             name for name, port in {**self.inputs, **self.outputs}.items()
             if port.guess_variable
         ]
-
 
     def validate_connections_and_iteration_sources(self):
         """
@@ -178,9 +177,6 @@ class Component:
     # GUESS HANDLING
     # ─────────────────────────────────────────────────────────────────────────────
 
-    def set_config(self):
-        print("[Warning!] No present configuration")
-        pass
 
     def assign_guess_variables(self, priority: Optional[List[str]] = None):
         """
@@ -227,48 +223,52 @@ class Component:
                     break
         return True
     
-    
-    def validate_guess(self):
-        """
-        Ensure all required guess values for guess variables are provided, non-None,
-        and no unexpected guess keys are included.
-        """
-        if not self.guess:
-            raise MissingGuessError(f"Initial guesses not provided for {self.name}")
+    def validate_guess(self, seen_nodes: set = None):
+        if seen_nodes is None:
+            seen_nodes = set()
 
-        # Normalize provided guess keys
+        if not self.guess:
+            self.guess = {}
+
+        required_normalized_keys = {}
+
+        for port in {**self.inputs, **self.outputs}.values():
+            shared = port._value
+            if not (shared.guess_variable and shared.iteration_variable):
+                continue
+            if shared in seen_nodes:
+                continue
+            seen_nodes.add(shared)
+            required_normalized_keys[self._normalize(port.name)] = port.name
+
+        if not required_normalized_keys:
+            return True
+
         guess_keys_normalized = {self._normalize(k): k for k in self.guess}
         provided_normalized_keys = set(guess_keys_normalized.keys())
 
-        # Determine required guess keys based on ports
-        required_normalized_keys = set()
-        for name, port in {**self.inputs, **self.outputs}.items():
-            if port.guess_variable:
-                required_normalized_keys.add(self._normalize(name))
-        # Check for missing required keys
-        missing_keys = required_normalized_keys - provided_normalized_keys
+        missing_keys = set(required_normalized_keys.keys()) - provided_normalized_keys
         if missing_keys:
-            missing_originals = [name for norm, name in guess_keys_normalized.items() if norm in missing_keys]
+            missing_names = [required_normalized_keys[k] for k in missing_keys]
             raise MissingGuessKeyError(
-                f"Missing required initial guess key(s) for {self.name}: {missing_keys}"
+                f"Missing required initial guess key(s) for {self.name}: {missing_names}"
             )
 
-        # Check for extra unexpected keys
-        extra_keys = provided_normalized_keys - required_normalized_keys
+        extra_keys = provided_normalized_keys - set(required_normalized_keys.keys())
         if extra_keys:
             extra_originals = [guess_keys_normalized[k] for k in extra_keys]
             raise InvalidGuessKeyError(
                 f"Unexpected guess key(s) in {self.name}: {extra_originals}. "
-                f"Expected only: {[self._denormalize(k) for k in required_normalized_keys]}"
+                f"Expected only: {[required_normalized_keys[k] for k in required_normalized_keys]}"
             )
 
-        # Check for None values
         for norm_key in required_normalized_keys:
             original_key = guess_keys_normalized[norm_key]
             if self.guess[original_key] is None:
                 raise MissingGuessValueError(f"Initial guess value for '{original_key}' cannot be None")
 
         return True
+
 
     def set_guess_variables(self, names: List[str]):
         """
@@ -444,20 +444,26 @@ class Component:
         norm = self._normalize(key)
         original, val = self._normalized_config.get(norm, (None, None))
         return val if condition else None
+    
 
     def validate_config(self):
         """Validate required config keys are present and non-null."""
+        required_keys = getattr(self.__class__, "required_keys", [])
+
+        # If no required keys, skip config validation
+        if not required_keys:
+            return
+
         if not self.configuration:
             raise MissingConfigurationError(f"No configuration provided for {self.name}")
 
-        for key in self.required_keys:
+        for key in required_keys:
             norm = self._normalize(key)
             if norm not in self._normalized_config:
                 raise MissingConfigurationKeyError(f"Missing required key: '{key}'")
             original_key, value = self._normalized_config[norm]
             if value is None:
                 raise MissingConfigurationValueError(f"Key '{original_key}' is present but has value None")
-
 
     # ─────────────────────────────────────────────────────────────────────────────
     # FORMATTED REPRESENTATION

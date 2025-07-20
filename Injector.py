@@ -59,8 +59,12 @@ if __name__ == "__main__":
     from TCA import TCA
 
     injector = Injector("Coax")
+
+    injector.print_iteration_variable_table()
     tca = TCA("Heatsink")
 
     injector.connect(tca)
 
     print(injector.get_iteration_variables())
+    injector.print_iteration_variable_table()
+    
