@@ -1,104 +1,100 @@
-
-from typing import Dict, Any
+from typing import Dict, Any, Optional, List
 from Port import InputPort, OutputPort
-from Exceptions import (PortNotConnectedError, PortTypeError, AmbiguousPortError,
-                        NoMatchingPortsError)
+from prettytable import PrettyTable
+from Exceptions import (
+    PortNotConnectedError, PortTypeError, AmbiguousPortError, NoMatchingPortsError,
+    MissingGuessError, MissingGuessKeyError, MissingGuessValueError
+)
 import re
+import numpy as np
+
 
 class Component:
     def __init__(self, name: str):
-        self.name: str = name
+        self.name = name
         self.inputs: Dict[str, InputPort] = {}
         self.outputs: Dict[str, OutputPort] = {}
         self.required_inputs: Dict[str, InputPort] = {}
         self.required_outputs: Dict[str, OutputPort] = {}
+        self.guess: Optional[dict] = None
+        self.num_expected_residuals = 1
 
-    def add_input(self, port_name: str, required: bool = False, guess_required: bool = False):
-        port = InputPort(name=port_name, component=self)
+    # ─────────────────────────────────────────────────────────────────────────────
+    # PORT MANAGEMENT
+    # ─────────────────────────────────────────────────────────────────────────────
+
+    def add_input(self, port_name: str, required: bool = False, iteration_variable: bool = False):
+        """Add an input port to the component."""
+        port = InputPort(name=port_name, component=self, iteration_variable=iteration_variable)
         self.inputs[port_name] = port
         if required:
             self.required_inputs[port_name] = port
-        if guess_required:
-            if not hasattr(self, "_guess_required_inputs"):
-                self._guess_required_inputs = set()
-            self._guess_required_inputs.add(port_name)
         return port
 
-
-    def add_output(self, port_name: str, required: bool = False):
-        port = OutputPort(name=port_name, component=self)
+    def add_output(self, port_name: str, required: bool = False, iteration_variable: bool = False):
+        """Add an output port to the component."""
+        port = OutputPort(name=port_name, component=self, iteration_variable=iteration_variable)
         self.outputs[port_name] = port
         if required:
             self.required_outputs[port_name] = port
         return port
 
+    def get_iteration_variables(self) -> List[str]:
+        """Return a list of port names marked as iteration variables."""
+        return [name for name, port in {**self.inputs, **self.outputs}.items() if port.iteration_variable]
+    
+    def get_guess_variables(self) -> List[str]:
+        """Return a list of port names marked as guess variables."""
+        return [
+            name for name, port in {**self.inputs, **self.outputs}.items()
+            if port.guess_variable
+        ]
+
     def validate_required_connections(self):
-        missing = []
-
-        for name, port in self.required_inputs.items():
-            if not port.is_connected():
-                missing.append(f"Input: {name}")
-
-        for name, port in self.required_outputs.items():
-            if not port.is_connected():
-                missing.append(f"Output: {name}")
-
+        """Ensure all required ports are connected, raise error if any are missing."""
+        missing = [
+            f"Input: {name}" for name, port in self.required_inputs.items() if not port.is_connected()
+        ] + [
+            f"Output: {name}" for name, port in self.required_outputs.items() if not port.is_connected()
+        ]
         if missing:
-            raise PortNotConnectedError(
-                f"{self.name} is missing connections for: {', '.join(missing)}"
-            )
+            raise PortNotConnectedError(f"{self.name} is missing connections for: {', '.join(missing)}")
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # CONNECTION LOGIC
+    # ─────────────────────────────────────────────────────────────────────────────
 
     def connect(self, other: "Component", only_required: bool = False):
-        """
-        Automatically connect matching ports between self and other using fuzzy, case-insensitive matching.
-        If only_required is True, only connects to required inputs/outputs of the target component.
-        Raises NoMatchingPortsError if no connections are made.
-        """
+        """Auto-connect matching ports between components using name normalization."""
         other_inputs = other.required_inputs if only_required else other.inputs
         other_outputs = other.required_outputs if only_required else other.outputs
-
         connection_made = False
 
-        for self_port_name, self_port in {**self.inputs, **self.outputs}.items():
-            # Determine direction
-            if isinstance(self_port, OutputPort):
-                search_ports = other_inputs
-            elif isinstance(self_port, InputPort):
-                search_ports = other_outputs
-            else:
-                continue  # Unexpected port type
-
+        for self_name, self_port in {**self.inputs, **self.outputs}.items():
+            search_ports = other_inputs if isinstance(self_port, OutputPort) else other_outputs
             matches = [
                 (name, port) for name, port in search_ports.items()
-                if self._normalize(name) == self._normalize(self_port_name)
+                if self._normalize(name) == self._normalize(self_name)
             ]
-
             if len(matches) == 1:
-                other_port_name, other_port = matches[0]
+                other_name, other_port = matches[0]
                 if isinstance(self_port, OutputPort) and isinstance(other_port, InputPort):
                     self_port.connect(other_port)
-                    print(f"[Connected] {self.name}: {self_port_name} → {other.name}: {other_port_name}")
-                    connection_made = True
+                    print(f"[Connected] {self.name}: {self_name} → {other.name}: {other_name}")
                 elif isinstance(self_port, InputPort) and isinstance(other_port, OutputPort):
                     other_port.connect(self_port)
-                    print(f"[Connected] {other.name}: {other_port_name} → {self.name}: {self_port_name}")
-                    connection_made = True
+                    print(f"[Connected] {other.name}: {other_name} → {self.name}: {self_name}")
                 else:
-                    raise PortTypeError(
-                        f"Invalid connection between {self.name}.{self_port_name} and {other.name}.{other_port_name}"
-                    )
+                    raise PortTypeError(f"Invalid connection between {self.name}.{self_name} and {other.name}.{other_name}")
+                connection_made = True
             elif len(matches) > 1:
-                raise AmbiguousPortError(
-                    f"Ambiguous port match for '{self_port_name}' between {self.name} and {other.name}: multiple similar targets"
-                )
+                raise AmbiguousPortError(f"Ambiguous port match for '{self_name}' between {self.name} and {other.name}")
 
         if not connection_made:
-            raise NoMatchingPortsError(
-                f"No ports could be connected between {self.name} and {other.name}."
-            )
-
+            raise NoMatchingPortsError(f"No ports could be connected between {self.name} and {other.name}.")
 
     def manual_connect(self, output_name: str, input_comp: "Component", input_name: str):
+        """Manually connect one output to another component's input."""
         out = self.outputs.get(output_name)
         inp = input_comp.inputs.get(input_name)
         if out and inp:
@@ -106,30 +102,153 @@ class Component:
             print(f"[Connected] {self.name}: {output_name} → {input_comp.name}: {input_name}")
 
     def connect_all_necessary_ports(self, other: "Component"):
-        self_outputs_lower = {self._normalize(name): port for name, port in self.outputs.items()}
-        other_inputs_required_lower = {
+        """Connect all required inputs of `other` to matching outputs from this component."""
+        self_outputs = {self._normalize(name): port for name, port in self.outputs.items()}
+        required_inputs = {
             self._normalize(name): (name, port) for name, port in other.required_inputs.items()
         }
 
-        unmatched_ports = []
-
-        for norm_name, (orig_name, input_port) in other_inputs_required_lower.items():
-            output_port = self_outputs_lower.get(norm_name)
-            if output_port:
-                output_port.connect(input_port)
-                print(f"[Connected] {self.name}: {output_port.name} → {other.name}: {orig_name}")
+        unmatched = []
+        for norm, (orig, inp) in required_inputs.items():
+            out = self_outputs.get(norm)
+            if out:
+                out.connect(inp)
+                print(f"[Connected] {self.name}: {out.name} → {other.name}: {orig}")
             else:
-                unmatched_ports.append(orig_name)
+                unmatched.append(orig)
 
-        for port_name in unmatched_ports:
-            print(f"[Warning] Could not connect required input '{port_name}' in {other.name} from any output in {self.name}.")
+        for name in unmatched:
+            print(f"[Warning] Could not connect required input '{name}' in {other.name}.")
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # GUESS HANDLING
+    # ─────────────────────────────────────────────────────────────────────────────
+
+    def assign_guess_variables(self, priority: Optional[List[str]] = None):
+        """Assign guess_variable flags to iteration variables based on residual count and priority."""
+        num = self.num_residuals()
+        candidates = {
+            name: port for name, port in {**self.inputs, **self.outputs}.items()
+            if port.iteration_variable
+        }
+
+        if priority:
+            priority = [self._normalize(p) for p in priority]
+            sorted_ports = sorted(
+                candidates.items(),
+                key=lambda item: priority.index(self._normalize(item[0])) if self._normalize(item[0]) in priority else float("inf")
+            )
+        else:
+            sorted_ports = list(candidates.items())
+
+        for _, port in candidates.items():
+            port.guess_variable = False
+
+        for i, (_, port) in enumerate(sorted_ports):
+            if i < num:
+                port.guess_variable = True
+
+    def set_guess(self, guess: dict):
+        """Set initial guess values for ports using normalized key matching."""
+        self.guess = guess
+        for key, val in guess.items():
+            norm_key = self._normalize(key)
+            for name, port in {**self.inputs, **self.outputs}.items():
+                if self._normalize(name) == norm_key:
+                    self[name] = val
+                    break
+        return True
+
+    def validate_guess(self):
+        """Ensure all required guess values for iteration variables are provided and non-None."""
+        if not self.guess:
+            raise MissingGuessError(f"Initial guesses not provided for {self.name}")
+
+        guess_keys = {self._normalize(k): k for k in self.guess}
+        for name, port in {**self.inputs, **self.outputs}.items():
+            if port.iteration_variable:
+                norm = self._normalize(name)
+                if norm not in guess_keys:
+                    raise MissingGuessKeyError(f"Missing required initial guess key: '{name}'")
+                if self.guess[guess_keys[norm]] is None:
+                    raise MissingGuessValueError(f"Initial guess value for '{name}' cannot be None")
+        return True
+
+    def set_guess_variables(self, names: List[str]):
+        """
+        Set which iteration_variables should be used as guess variables.
+
+        All other iteration_variables will be deactivated from the guess set.
+
+        Parameters:
+        ----------
+        names : List[str]
+            List of port names to be used as guess variables.
+            Matching is fuzzy using normalized names.
+        """
+        norm_names = [self._normalize(n) for n in names]
+        for name, port in {**self.inputs, **self.outputs}.items():
+            if port.iteration_variable:
+                port.guess_variable = self._normalize(name) in norm_names
+
+    def toggle_guess_variable(self, name: str, enable: bool = True):
+        """
+        Enable or disable a port as an active guess variable.
+
+        Fuzzy-matches port name using normalized comparison.
+        The port must already be marked as an iteration variable.
+
+        Parameters:
+        ----------
+        name : str
+            Name of the port to toggle.
+        enable : bool, default=True
+            True to activate; False to deactivate.
+
+        Raises:
+        -------
+        ValueError if the port is not an iteration variable.
+        KeyError if no matching port is found.
+        """
+        norm = self._normalize(name)
+        for port_name, port in {**self.inputs, **self.outputs}.items():
+            if self._normalize(port_name) == norm:
+                if not port.iteration_variable:
+                    raise ValueError(f"'{port_name}' is not an iteration variable and cannot be toggled.")
+                port.guess_variable = enable
+                return
+        raise KeyError(f"No port found matching '{name}'")
+
+
+    def get_guess_vector(self):
+        """
+        Return the current guess vector (only for ports that are both guess and iteration variables).
+        """
+        return np.array([
+            port.value for port in {**self.inputs, **self.outputs}.values()
+            if port.guess_variable and port.iteration_variable
+        ])
+
+    def set_guess_vector(self, vec: np.ndarray):
+        """
+        Update the component's values from a new guess vector.
+        """
+        i = 0
+        for port in {**self.inputs, **self.outputs}.values():
+            if port.guess_variable and port.iteration_variable:
+                port.value = vec[i]
+                i += 1
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # NORMALIZATION, ACCESS, RESIDUALS
+    # ─────────────────────────────────────────────────────────────────────────────
 
     def _normalize(self, name: str):
-        # Remove anything in parentheses, strip spaces, and lower-case
-        name = re.sub(r"\(.*?\)", "", name)
-        return name.strip().lower()
+        """Normalize a port name: remove parentheses, lowercase, strip whitespace."""
+        return re.sub(r"\(.*?\)", "", name).strip().lower()
 
     def _resolve_port(self, port_name: str):
+        """Resolve a port name to its Input/OutputPort object."""
         norm = self._normalize(port_name)
         for name, port in {**self.inputs, **self.outputs}.items():
             if self._normalize(name) == norm:
@@ -142,29 +261,95 @@ class Component:
     def __setitem__(self, port_name: str, value: Any):
         self._resolve_port(port_name).value = value
 
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # FORMATTED REPRESENTATION
+    # ─────────────────────────────────────────────────────────────────────────────
     def __repr__(self):
-        def format_input(name, port):
-            marker = "*" if name in self.required_inputs else " "
-            if port.is_connected():
-                conns = ", ".join(f"{p.name} in {p.component.name}" for p in port.connected_ports)
-                return f"{marker}{name} ← {conns}"
-            else:
-                return f"{marker}{name} ← None"
 
-        def format_output(name, port):
-            marker = "*" if name in self.required_outputs else " "
-            if port.is_connected():
-                conns = ", ".join(f"{p.name} in {p.component.name}" for p in port.connected_ports)
-                return f"{marker}{name} → {conns}"
-            else:
-                return f"{marker}{name} → None"
+        def build_table(port_dict, direction_label, required_set):
+            table = PrettyTable()
+            table.title = f"{direction_label} Ports"
+            table.field_names = [
+                "Port Name", "Connections", "Required", "Iteration Variable", "Guess Variable", "Current Value"
+            ]
+            table.align["Port Name"] = "l"  # Left-justify port names
 
-        inputs = "\n    ".join(format_input(name, port) for name, port in self.inputs.items()) or "    None"
-        outputs = "\n    ".join(format_output(name, port) for name, port in self.outputs.items()) or "    None"
+            for name, port in port_dict.items():
+                conns = ", ".join(f"{p.name} in '{p.component.name}'" for p in port.connected_ports) if port.is_connected() else "None"
+                required = "Yes" if name in required_set else "No"
+                iteration = "Yes" if port.iteration_variable else "No"
+                guess = "Yes" if port.guess_variable else "No"
+                value = port.value if port.value is not None else "—"
+                table.add_row([name, conns, required, iteration, guess, value])
 
-        return f"* {self.name}\n  Inputs:\n    {inputs}\n  Outputs:\n    {outputs}"
+            return table
 
+        input_table = build_table(self.inputs, "Input", self.required_inputs)
+        output_table = build_table(self.outputs, "Output", self.required_outputs)
 
+        return f"\n========== Component: {self.name} ==========\n{input_table}\n{output_table}"
+        
+    def print_iteration_variable_table(self):
+        """
+        Pretty-print a table of all iteration variables, indicating which are guess variables.
+        """
+
+        table = PrettyTable()
+        table.field_names = ["Port Name", "Direction", "Guess Variable", "Current Value"]
+        table.align["Port Name"] = "l"  # Left-justify port names
+
+        for name, port in {**self.inputs, **self.outputs}.items():
+            if port.iteration_variable:
+                direction = "Input" if name in self.inputs else "Output"
+                is_guess = "Yes" if port.guess_variable else "-"
+                value = port.value if port.value is not None else "—"
+                table.add_row([name, direction, is_guess, value])
+
+        print(f"\n========== Iteration Variables for Component: {self.name} ==========")
+        print(table)
+
+    def print_guess_variable_table(self):
+        """
+        Pretty-print a table of all guess variables, indicating whether they're iteration variables.
+        """
+
+        table = PrettyTable()
+        table.field_names = ["Port Name", "Direction", "Iteration Variable", "Current Value"]
+        table.align["Port Name"] = "l"  # Left-justify port names
+
+        for name, port in {**self.inputs, **self.outputs}.items():
+            if port.guess_variable:
+                direction = "Input" if name in self.inputs else "Output"
+                is_iter = "Yes" if port.iteration_variable else "-"
+                value = port.value if port.value is not None else "—"
+                table.add_row([name, direction, is_iter, value])
+
+        print(f"\n========== Guess Variables for Component: {self.name} ==========")
+        print(table)
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # RESIDUALS / SOLVER SUPPORT
+    # ─────────────────────────────────────────────────────────────────────────────
+
+    def residuals(self) -> List[float]:
+        """
+        Define the residuals for this component.
+        Subclasses should override this to return a list of residual expressions.
+        """
+        return [1.0]  # default placeholder residual
+
+    def num_residuals(self) -> int:
+        """
+        Return the number of residual equations for this component.
+        Used to determine how many guess variables should be selected.
+        """
+        self._num_residuals = len(self.residuals())
+        return self._num_residuals
+
+    def on_steady_state_solve(self):
+        """Optional hook to run after steady-state solver succeeds."""
+        print(f"Solver done for {self.name}")
 
 if __name__ == "__main__":
 

@@ -38,15 +38,16 @@ class SharedPortValue:
 
 
 class BasePort:
-    def __init__(self, name: str, component: "Component"):
+    def __init__(self, name: str, component: "Component", iteration_variable: bool = False):
         self.name = name
         self.component = component
+        self.iteration_variable = iteration_variable
+        self.guess_variable = False
         self._value = SharedPortValue()
         self._value.subscribe(self)
         self.connected_ports: list["BasePort"] = []
 
     def connect(self, other: "BasePort"):
-        # Always merge values, ensuring all ports share one SharedPortValue
         self._value.merge(other._value)
         self.connected_ports.append(other)
         other.connected_ports.append(self)
@@ -63,11 +64,13 @@ class BasePort:
         return len(self.connected_ports) > 0
 
     def on_value_changed(self, val):
-        pass  # hook for extension
+        pass
 
 
 class InputPort(BasePort):
     pass
 
+
 class OutputPort(BasePort):
     pass
+
