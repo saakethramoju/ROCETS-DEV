@@ -253,13 +253,11 @@ class System:
         return raw_data
 
 
-    
-
     def solve(self):
         from scipy.optimize import root
         from Exceptions import SteadyStateSolveError, GuessResidualMismatchError
 
-        # Get all unique guess nodes
+        # Identify unique shared guess+iteration nodes
         guess_nodes = []
         seen = set()
         for c in self.components:
@@ -270,14 +268,15 @@ class System:
                     guess_nodes.append(node)
 
         x0 = [n.value for n in guess_nodes]
-        r0 = self.get_residuals()
 
-        if len(x0) != len(r0):
-            raise GuessResidualMismatchError(len(x0), len(r0))
+        # Check: residual count must match guess count, but without evaluating twice
+        residual_count = sum(len(c.residuals()) for c in self.components)
+        if len(x0) != residual_count:
+            raise GuessResidualMismatchError(len(x0), residual_count)
 
+        # Solve
         solution = root(self.residual_function, x0)
         if solution.success:
-            # Apply solution to shared nodes
             for i, node in enumerate(guess_nodes):
                 node.broadcast(solution.x[i])
             for c in self.components:
@@ -288,25 +287,10 @@ class System:
                 message=solution.message,
                 guess_vars=[n.name for n in guess_nodes]
             )
-
-
-        if len(x0) != len(r0):
-            raise GuessResidualMismatchError(len(x0), len(r0))
-
-        solution = root(self.residual_function, x0)
-        if solution.success:
-            self.set_guess_vector(solution.x)
-            for c in self.components:
-                c.on_steady_state_solve(solution)
-        else:
-            raise SteadyStateSolveError(
-                component_name=self.name,
-                message=solution.message,
-                guess_vars=[g for c in self.components for g in c.get_guess_variables()]
-            )
         return solution
 
-        
+
+            
     def _normalize(self, name: str) -> str:
         """
         Normalize a component or port name for consistent lookup:
