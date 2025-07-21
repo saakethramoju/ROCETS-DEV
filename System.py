@@ -1,124 +1,61 @@
-import yaml
 import os
-from scipy.optimize import root
-from Exceptions import SteadyStateSolveError, GuessResidualMismatchError
-import numpy as np
-
+import yaml
+from Core import InputPort, OutputPort
+from prettytable import PrettyTable
 
 class System:
-    def __init__(self, name: str):
+    def __init__(self, name):
         self.name = name
         self.components = []
-        self.connections = []  # (from_component, from_port, to_component, to_port)
 
     def add_component(self, component):
-        """Add a component and recursively include all connected components."""
-        to_visit = [component]
-        seen = set()
+        visited = set()
 
-        while to_visit:
-            current = to_visit.pop()
-            if current in seen:
-                continue
-            seen.add(current)
-            self.components.append(current)
+        def _recursive_add(comp):
+            if comp in visited:
+                return
+            visited.add(comp)
+            if comp.system is not self:
+                comp.system = self
+                self.components.append(comp)
+            for port in comp.ports:
+                if port.node:
+                    for connected_port in port.node.ports:
+                        if connected_port.owner is not comp:
+                            _recursive_add(connected_port.owner)
 
-            # Traverse all ports for this component
-            for port in list(current.inputs.values()) + list(current.outputs.values()):
-                for connected_port in port.connected_ports:
-                    other_component = connected_port.component
-                    if other_component not in seen and other_component not in self.components:
-                        to_visit.append(other_component)
-
-
-    def connect(self, from_component, from_port, to_component, to_port):
-        self.connections.append((from_component, from_port, to_component, to_port))
-        from_component.manual_connect(from_port, to_component, to_port)
-
-    def get_residuals(self):
-        residuals = []
-        seen_nodes = set()
-        for component in self.components:
-            component.validate_all(seen_nodes=seen_nodes)
-            residuals.extend(component.residuals())
-        return residuals
+        _recursive_add(component)
 
 
-    def get_guess_vector(self):
-        seen = set()
-        guess = []
+    def generate_configuration_template(self, file_name: str = None):
+        """
+        Generate a YAML configuration template for all components in the system.
+        Lists required and optional keys for each component as separate YAML sections.
+        """
+        config_dict = {}
 
         for component in self.components:
-            for port in {**component.inputs, **component.outputs}.values():
-                shared = port._value
-                if shared in seen:
-                    continue
-                seen.add(shared)
-                if shared.iteration_variable and shared.guess_variable:
-                    guess.append(shared.value)
+            component_dict = {}
 
-        return np.array(guess)
+            for key in getattr(component, "required_config_keys", []):
+                component_dict[key] = None
 
+            for key in getattr(component, "optional_config_keys", []):
+                component_dict[key] = None
 
-    def set_guess_vector(self, x):
-        seen = set()
-        i = 0
-
-        for component in self.components:
-            for port in {**component.inputs, **component.outputs}.values():
-                shared = port._value
-                if shared in seen:
-                    continue
-                seen.add(shared)
-                if shared.iteration_variable and shared.guess_variable:
-                    shared.broadcast(x[i])
-                    i += 1
-
-
-    def residual_function(self, x):
-        self.set_guess_vector(x)
-        return self.get_residuals()
-        
-
-    def collect_config_keys(self) -> dict:
-        """
-        Collect all configuration keys (required + optional) for each component.
-        The output is a dictionary like:
-        {"Heatsink [TCA]": {"Nozzle Type": None, ...}, ...}
-        """
-        config_map = {}
-
-        for component in self.components:
-            typename = type(component).__name__
-            label = f"{component.name} [{typename}]"
-
-            # Grab required_keys and all_config_keys if they exist
-            required_keys = getattr(component.__class__, "required_keys", [])
-            all_keys = getattr(component.__class__, "all_config_keys", required_keys)
-
-            config_map[label] = {k: None for k in all_keys}
-
-        return config_map
-    
-
-    def write_configuration_template(self, file_name: str = None):
-        """
-        Collect configuration keys from all components in the system and write them to a YAML template file.
-        If a file with the same name already exists, a unique numbered file name is generated.
-        """
-        config_dict = self.collect_config_keys()
+            config_dict[component.name] = component_dict
 
         if file_name is None:
             file_name = f"{self.name} Configuration.yaml"
 
-        # Generate a unique file name if it already exists
+        # Ensure file name is unique if it exists
         base, ext = os.path.splitext(file_name)
         counter = 1
         while os.path.exists(file_name):
             file_name = f"{base}_{counter}{ext}"
             counter += 1
 
-        # Dump YAML as string to edit before writing
+        # Dump YAML to string for cleanup
         yaml_string = yaml.dump(
             config_dict,
             allow_unicode=True,
@@ -126,223 +63,117 @@ class System:
             default_flow_style=False
         )
 
-        # Replace ": null" with just ":"
+        # Replace ": null" with just ":" for cleaner appearance
         cleaned_yaml = yaml_string.replace(": null", ":")
 
-        # Ensure clear spacing between component blocks
-        cleaned_yaml = "\n\n".join(block.strip() for block in cleaned_yaml.split("\n\n"))
-
         with open(file_name, "w", encoding="utf-8") as f:
+            f.write(f"# Configuration Template for System: {self.name}\n")
+            f.write("# Fill in required values. Optional values may be left blank.\n\n")
             f.write(cleaned_yaml)
 
         print(f"[✓] Configuration template written to: {os.path.abspath(file_name)}")
 
-            
-    def read_configuration(self, file_path: str) -> dict:
+
+    def read_configuration(self, file_path: str):
         """
-        Load a YAML file containing config values and assign them to the appropriate components.
-        Returns a dictionary of component names to their config values.
-        """
-        import yaml
-
-        with open(file_path, 'r', encoding='utf-8') as f:
-            config_data = yaml.safe_load(f)
-
-        for component in self.components:
-            typename = type(component).__name__
-            label = f"{component.name} [{typename}]"
-            component_config = config_data.get(label, {})
-
-            # Convert blank strings or None to None explicitly
-            parsed_config = {
-                k: (None if v in ("", None) else v) for k, v in component_config.items()
-            }
-
-            component.set_config(parsed_config)
-
-        return config_data
+        Read a YAML file and apply configuration to all matching components in the system.
         
-    def collect_guess_keys(self) -> dict:
+        Each top-level key should match a component's name.
         """
-        Collect unique guess variable keys based on shared nodes, not per-component.
-        Output format:
-        {
-            "Heatsink [TCA]": {"Chamber Pressure (psia)": None, ...},
-            ...
-        }
-        The component that owns the first port in a shared group is responsible for writing the guess.
-        """
-        seen_nodes = set()
-        guess_map = {}
+        if not os.path.isfile(file_path):
+            raise FileNotFoundError(f"Configuration file '{file_path}' not found.")
+
+        with open(file_path, "r", encoding="utf-8") as f:
+            try:
+                config_data = yaml.safe_load(f)
+            except yaml.YAMLError as e:
+                raise yaml.YAMLError(f"Error parsing YAML file '{file_path}': {e}")
+
+        if not isinstance(config_data, dict):
+            raise ValueError("Top-level YAML structure must be a dictionary of components.")
+
+        unmatched = []
+
+        for comp_name, config in config_data.items():
+            match = next((c for c in self.components if c.name == comp_name), None)
+            if match:
+                match.set_config(config)
+                print(f"[✓] Configuration applied to component: {comp_name}")
+            else:
+                unmatched.append(comp_name)
+
+        if unmatched:
+            print(f"[!] Warning: Could not find component(s) in system: {', '.join(unmatched)}")
+
+
+    def print_nodes(self):
+        """Pretty print all nodes in the system with their connected component and port counts."""
+        all_nodes = set()
 
         for component in self.components:
-            typename = type(component).__name__
-            label = f"{component.name} [{typename}]"
+            for port in component.ports:
+                if port.node:
+                    all_nodes.add(port.node)
 
-            for port in {**component.inputs, **component.outputs}.values():
-                shared = port._value
-                if shared in seen_nodes:
-                    continue
-                seen_nodes.add(shared)
+        table = PrettyTable()
+        table.title = f"Nodes in System: {self.name}"
+        table.field_names = ["Node Name", "# Components", "# Ports"]
+        table.align["Node Name"] = "l"
 
-                if shared.iteration_variable and shared.guess_variable:
-                    if label not in guess_map:
-                        guess_map[label] = {}
-                    guess_map[label][port.name] = None  # Use the port name from this component's perspective
+        for node in sorted(all_nodes, key=lambda n: n.name):
+            components = {p.owner for p in node.ports}
+            table.add_row([node.name, len(components), len(node.ports)])
 
-        return guess_map
-
-    def write_guess_template(self, file_name: str = None):
-        """
-        Collect all guess variable keys from components and write them to a YAML file.
-        If the file already exists, a unique filename is generated to avoid overwriting.
-        """
-        guess_dict = self.collect_guess_keys()
-
-        if file_name is None:
-            file_name = f"{self.name} Guess.yaml"
-
-        # Generate a unique file name if it already exists
-        base, ext = os.path.splitext(file_name)
-        counter = 1
-        while os.path.exists(file_name):
-            file_name = f"{base}_{counter}{ext}"
-            counter += 1
-
-        # Dump YAML as string to edit before writing
-        yaml_string = yaml.dump(
-            guess_dict,
-            allow_unicode=True,
-            sort_keys=False,
-            default_flow_style=False
-        )
-
-        # Replace ": null" with just ":"
-        cleaned_yaml = yaml_string.replace(": null", ":")
-        cleaned_yaml = "\n\n".join(block.strip() for block in cleaned_yaml.split("\n\n"))
-
-        with open(file_name, "w", encoding="utf-8") as f:
-            f.write(cleaned_yaml)
-
-        print(f"[✓] Guess template written to: {os.path.abspath(file_name)}")
+        print(table)
 
 
-    def read_guess(self, filepath: str) -> dict:
-        """Read guess YAML and assign to appropriate components."""
-        import yaml
-        with open(filepath, 'r') as f:
-            raw_data = yaml.safe_load(f)
+    def __str__(self):
+        from prettytable import PrettyTable
+        table = PrettyTable()
+        table.title = f"System: {self.name}"
+        table.field_names = ["Component", "# Inputs", "# Outputs"]
+        table.align["Component"] = "l"
 
-        # Normalize component names from YAML
-        component_map = {
-            self._normalize(f"{c.name} [{c.__class__.__name__}]"): c
-            for c in self.components
-        }
+        for comp in self.components:
+            inputs = sum(isinstance(p, InputPort) for p in comp.ports)
+            outputs = sum(isinstance(p, OutputPort) for p in comp.ports)
+            table.add_row([comp.name, inputs, outputs])
 
-        for yaml_name, guess_block in raw_data.items():
-            norm_name = self._normalize(yaml_name)
-            component = component_map.get(norm_name)
-            if component is None:
-                print(f"[Warning] No matching component found for guess block: '{yaml_name}'")
-                continue
-
-            # Assign guess to component
-            print(f"[Guess Assignment] Setting guess for {component.name} → {guess_block}")
-            component.set_guess(guess_block)
-
-        return raw_data
+        return str(table)
 
 
-    def solve(self):
-        from scipy.optimize import root
-        from Exceptions import SteadyStateSolveError, GuessResidualMismatchError
-
-        # Identify unique shared guess+iteration nodes
-        guess_nodes = []
-        seen = set()
-        for c in self.components:
-            for port in list(c.inputs.values()) + list(c.outputs.values()):
-                node = port._value
-                if node.guess_variable and node.iteration_variable and node not in seen:
-                    seen.add(node)
-                    guess_nodes.append(node)
-
-        x0 = [n.value for n in guess_nodes]
-
-        # Check: residual count must match guess count, but without evaluating twice
-        residual_count = sum(len(c.residuals()) for c in self.components)
-        if len(x0) != residual_count:
-            raise GuessResidualMismatchError(len(x0), residual_count)
-
-        # Solve
-        solution = root(self.residual_function, x0)
-        if solution.success:
-            for i, node in enumerate(guess_nodes):
-                node.broadcast(solution.x[i])
-            for c in self.components:
-                c.on_steady_state_solve(solution)
-        else:
-            raise SteadyStateSolveError(
-                component_name=self.name,
-                message=solution.message,
-                guess_vars=[n.name for n in guess_nodes]
-            )
-        return solution
-
-
-            
-    def _normalize(self, name: str) -> str:
-        """
-        Normalize a component or port name for consistent lookup:
-        - Remove parenthetical units
-        - Convert to lowercase
-        - Strip leading/trailing whitespace
-        """
-        import re
-        return re.sub(r"\(.*?\)", "", name).strip().lower()
-
-
-
-    def __repr__(self):
-        return f"System: {self.name} → {len(self.components)} Components"
 
 
 if __name__ == "__main__":
 
     from TCA import TCA
-    from Component import Component
+    from Core import Component
 
-
-    EngineSystem = System("Vespula")
+    vespula = System("Vespula")
     tca = TCA("Heatsink")
     injector = Component("Coax")
-    injector.add_output("Chamber Pressure (psia)", required=True)
-    injector.add_output("Mixture Ratio", required=True)
-    injector.add_output("Fuel Temperature (K)", required=True)
-    injector.add_output("Oxidizer Temperature (K)", required=True)
-    injector.add_output("Oxidizer", required=True)
-    injector.add_output("Fuel", required=True)
-    injector.add_output('Injector Mass Flow Rate (kg/s)', required=True)
+    #sensor = Component("PT")
+    #sensor.add_input("chamber pressure")
+    injector.add_output("Chamber Pressure")
+    injector.add_output("Mixture Ratio")
+    injector.add_output("Fuel Temperature (K)")
+    injector.add_output("Oxidizer Temperature")
+    injector.add_output("Oxidizer")
+    injector.add_output("Fuel")
+
+    vespula.add_component(tca)
     tca.connect(injector)
+    print(vespula)
 
-    #injector["Chamber Pressure (psia)"] = 400
-    injector["mixture ratio"] = 2.3
-    injector["Fuel Temperature"] = 298.15
-    injector["Oxidizer temperature"] = 90
-    injector["Oxidizer "] = 'LOX'
-    injector['Fuel'] = 'RP-1'
-    injector['injector Mass Flow Rate'] = 5
+    #vespula.generate_configuration_template()
+    vespula.read_configuration("/Users/saakethramramoju/Desktop/ROCETS DEV/Vespula Configuration.yaml")
+    tca.print_config_summary()
+    #injector.print_config_summary()
 
-    EngineSystem.add_component(tca)
-    #EngineSystem.add_component()
-    print(EngineSystem)
-
-    #tca.set_guess_variables(["mixture ratio"])
-    #EngineSystem.write_configuration_template()
-    #EngineSystem.write_guess_template()
-    x = EngineSystem.read_configuration("/Users/saakethramramoju/Desktop/ROCETS DEV/Vespula Configuration.yaml")
-    y = EngineSystem.read_guess("/Users/saakethramramoju/Desktop/ROCETS DEV/Vespula Guess.yaml")
-    #print(type(y["Heatsink [TCA]"]['Mixture Ratio']))
-
-    
-    EngineSystem.solve()
+    vespula.print_nodes()
+    injector["CHamber pressure"] = 300
+    tca["mixture ratio"] = 2
+    injector["fuel"] = 'RP-1'
+    injector["oxidizer"] = 'LOX'
+    print(tca)
+    print(tca.mass_conservation_equation())
