@@ -7,7 +7,8 @@ from prettytable import PrettyTable
 from difflib import get_close_matches
 
 from Exceptions import (MissingConfigurationError, MissingConfigurationKeyError, MissingConfigurationValueError,
-                        MissingPortError, PortTypeError)
+                        MissingPortError, PortTypeError, MissingMassConservationEquation, MissingFlowPortError,
+                        FlowPortTypeError)
 
 
 class Component:
@@ -18,14 +19,35 @@ class Component:
 
     config_keys = required_config_keys + optional_config_keys
 
+    system_variables: List[str] = []
+
     def __init__(self, name: str):
         self.name = name
         self.ports: List["Port"] = []
         self.system = None 
 
+    def add_inflow(self, name: str) -> "InFlow":
+        port = InFlow(name, self)
+        self.ports.append(port)
+        return port
+
+    def add_outflow(self, name: str) -> "OutFlow":
+        port = OutFlow(name, self)
+        self.ports.append(port)
+        return port
+
+
     def add_input(self, name: str) -> "InputPort":
         port = InputPort(name, self)
         self.ports.append(port)
+
+        # Initialize instance-level system_variables if needed
+        if not hasattr(self, "system_variables"):
+            self.system_variables = []
+
+        if name not in self.system_variables:
+            self.system_variables.append(name)
+
         return port
 
     def add_output(self, name: str) -> "OutputPort":
@@ -69,6 +91,47 @@ class Component:
             self.system.add_component(other)
         elif other.system and self.system is None:
             other.system.add_component(self)
+
+
+    def connect_flow(self, port_name_self: str, other: "Component", port_name_other: str):
+        """Connect a flow port from self to a flow port on another component.
+
+        Requires explicit port names. Automatically handles InFlow ↔ OutFlow logic.
+
+        Raises:
+            MissingFlowPortError: If one or both ports cannot be found.
+            FlowPortTypeError: If both ports are the same type (InFlow ↔ InFlow or OutFlow ↔ OutFlow).
+        """
+        # Normalize input
+        norm_self = self._normalize(port_name_self)
+        norm_other = other._normalize(port_name_other)
+
+        # Find ports
+        port_self = next((p for p in self.ports if self._normalize(p.name) == norm_self), None)
+        port_other = next((p for p in other.ports if other._normalize(p.name) == norm_other), None)
+
+        # Check both ports exist
+        if not port_self or not port_other:
+            raise MissingFlowPortError(
+                f"Could not find flow ports: '{port_name_self}' on '{self.name}' "
+                f"or '{port_name_other}' on '{other.name}'."
+            )
+
+        # Check types
+        valid_pair = (
+            (isinstance(port_self, InFlow) and isinstance(port_other, OutFlow)) or
+            (isinstance(port_self, OutFlow) and isinstance(port_other, InFlow))
+        )
+
+        if not valid_pair:
+            raise FlowPortTypeError(
+                f"Invalid connection: '{port_name_self}' on '{self.name}' ({type(port_self).__name__}) "
+                f"↔ '{port_name_other}' on '{other.name}' ({type(port_other).__name__})."
+            )
+
+        # Connect them
+        port_self.connect(port_other)
+
 
     def set_config(self, config: dict):
         """Store config with fuzzy-matched canonical keys (both required and optional)."""
@@ -118,7 +181,7 @@ class Component:
             return {"missing_keys": missing_keys, "missing_values": missing_values}
 
 
-    def print_config_summary(self):
+    def config_summary(self):
         """Pretty print the resolved configuration, including optional keys."""
         config = getattr(self, "configuration", {})
 
@@ -131,7 +194,7 @@ class Component:
             is_required = "Yes" if key in self.required_config_keys else "No"
             table.add_row([key, value, is_required])
 
-        print(str(table))
+        #print(str(table))
         return str(table)
     
 
@@ -214,26 +277,30 @@ class Component:
         self.set_config(config_data)
         print(f"[✓] Configuration successfully loaded from '{file_path}'")
 
-    def add_system_key(self, key: str, value: Any):
-        if not hasattr(self, "system_variable_keys"):
-            self.system_variable_keys = []
+    def add_system_target(self, key: str, value: Any):
+        if not hasattr(self, "system_targets"):
+            self.system_targets = []
         if not hasattr(self, "_system_values"):
             self._system_values = {}
 
-        if key not in self.system_variable_keys:
-            self.system_variable_keys.append(key)
+        if key not in self.system_targets:
+            self.system_targets.append(key)
         self._system_values[key] = value
-
 
     def __getitem__(self, key: str):
         norm_key = self._normalize(key)
 
-        # 1. Ports
+        # 1. Flow Ports (mass flow access)
+        for port in self.ports:
+            if isinstance(port, FlowPort) and self._normalize(port.name) == norm_key:
+                return port.get_mass_flow()
+
+        # 2. Regular Ports
         for port in self.ports:
             if self._normalize(port.name) == norm_key:
                 return port.get_value()
 
-        # 2. "geometry"
+        # 3. "geometry"
         if norm_key == "geometry":
             try:
                 self.validate_config()
@@ -241,14 +308,14 @@ class Component:
             except Exception:
                 return None
 
-        # 3. Config keys
+        # 4. Config keys
         for config_key in self.required_config_keys + self.optional_config_keys:
             if self._normalize(config_key) == norm_key:
                 return self.configuration.get(config_key)
 
-        # 4. System keys
-        if hasattr(self, "_system_values"):
-            for sys_key in self.system_variable_keys:
+        # 5. System targets
+        if hasattr(self, "system_targets") and hasattr(self, "_system_values"):
+            for sys_key in self.system_targets:
                 if self._normalize(sys_key) == norm_key:
                     return self._system_values.get(sys_key, None)
 
@@ -259,13 +326,19 @@ class Component:
     def __setitem__(self, key: str, value):
         norm_key = self._normalize(key)
 
-        # 1. Ports
+        # 1. Flow Ports (mass flow setter)
+        for port in self.ports:
+            if isinstance(port, FlowPort) and self._normalize(port.name) == norm_key:
+                port.set_mass_flow(value)
+                return
+
+        # 2. Regular Ports
         for port in self.ports:
             if self._normalize(port.name) == norm_key:
                 port.set_value(value)
                 return
 
-        # 2. Config
+        # 3. Config keys
         match = self._fuzzy_match_config_key(norm_key, search_keys=self.config_keys)
         if match:
             if not hasattr(self, "configuration"):
@@ -273,42 +346,49 @@ class Component:
             self.configuration[match] = value
             return
 
-        # 3. System variables
-        if hasattr(self, "system_variable_keys"):
-            for sys_key in self.system_variable_keys:
-                if self._normalize(sys_key) == norm_key:
-                    self._system_values[sys_key] = value
+        # 4. System targets
+        if hasattr(self, "system_targets"):
+            for target_key in self.system_targets:
+                if self._normalize(target_key) == norm_key:
+                    if not hasattr(self, "_system_values"):
+                        self._system_values = {}
+                    self._system_values[target_key] = value
                     return
 
-        # If nothing matched
         raise MissingPortError(
-            f"No port or configuration key matching '{key}' found in component '{self.name}'"
+            f"No port or configuration/system key matching '{key}' found in component '{self.name}'"
         )
 
     def __repr__(self):
         def build_table(ports, direction_label):
             table = PrettyTable()
             table.title = f"{direction_label} Ports for {self.name}"
-            table.field_names = [
-                "Port", "Connected To", "Node", "Current Value"
-            ]
+            table.field_names = ["Port", "Connected To", "Node", "Current Value"]
             table.align["Port"] = "l"
 
             for port in ports:
-                port_id = port.name  # No [Component] tag here
-                node_name = port.node.name if port.node else "—"
-                value = port.get_value() if port.get_value() is not None else "—"
+                port_id = port.name
 
-                connected_ports = [
-                    f"{p.name} [{p.owner.name}]"
-                    for p in port.node.ports
-                    if p is not port
-                ] if port.node else []
+                if isinstance(port, FlowPort):
+                    node_name = port.flow_node.name if port.flow_node else "—"
+                    value = port.get_mass_flow() if port.get_mass_flow() is not None else "—"
+                    connected_ports = [
+                        f"{p.name} [{p.owner.name}]"
+                        for p in port.flow_node.ports
+                        if p is not port
+                    ] if port.flow_node else []
+
+                else:
+                    node_name = port.node.name if port.node else "—"
+                    value = port.get_value() if port.get_value() is not None else "—"
+                    connected_ports = [
+                        f"{p.name} [{p.owner.name}]"
+                        for p in port.node.ports
+                        if p is not port
+                    ] if port.node else []
 
                 if connected_ports:
-                    # First connection row
                     table.add_row([port_id, connected_ports[0], node_name, value])
-                    # Additional connections as stacked rows
                     for conn in connected_ports[1:]:
                         table.add_row(["", conn, "", ""])
                 else:
@@ -318,11 +398,24 @@ class Component:
 
         input_ports = [p for p in self.ports if isinstance(p, InputPort)]
         output_ports = [p for p in self.ports if isinstance(p, OutputPort)]
+        inflows = [p for p in self.ports if isinstance(p, InFlow)]
+        outflows = [p for p in self.ports if isinstance(p, OutFlow)]
 
         input_table = build_table(input_ports, "Input")
         output_table = build_table(output_ports, "Output")
+        inflow_table = build_table(inflows, "Inflow")
+        outflow_table = build_table(outflows, "Outflow")
 
-        return f"\n========== Component: {self.name} ==========\n{input_table}\n{output_table}"
+        return (
+            f"\n========== Component: {self.name} ==========\n"
+            f"{input_table}\n"
+            f"{output_table}\n"
+            f"{inflow_table}\n"
+            f"{outflow_table}"
+        )
+
+    def mass_flow(self):
+        raise MissingMassConservationEquation("Make sure that the component has an implmented mass conservation equation!")
 
 
 
@@ -357,6 +450,31 @@ class Node:
 
     def __repr__(self):
         return f"<Node name={self.name} value={self._value} ports={len(self.ports)}>"
+    
+
+
+class FlowNode:
+    def __init__(self, name=None):
+        self.name = name or f"FlowNode_{id(self)}"
+        self.ports = []  # Only FlowPorts
+        self.residual = 0.0  # To store mass conservation residual
+
+    def connect(self, port: "FlowPort"):
+        if port not in self.ports:
+            self.ports.append(port)
+            port.flow_node = self
+
+    def compute_residual(self):
+        """Sum all inflows (positive) and outflows (negative)"""
+        residual = 0.0
+        for port in self.ports:
+            flow = port.get_mass_flow() or 0.0
+            residual += flow if isinstance(port, InFlow) else -flow
+        self.residual = residual
+        return residual
+
+    def __repr__(self):
+        return f"<FlowNode {self.name} residual={self.residual:.4f}>"
 
 
 class Port:
@@ -408,4 +526,42 @@ class InputPort(Port):
 class OutputPort(Port):
     pass
 
+class FlowPort(Port):
+    def __init__(self, name: str, owner: Component):
+        super().__init__(name, owner)  # Initialize base Port attributes (like node)
+        self.flow_node: Optional[FlowNode] = None
+        self._mass_flow: Optional[float] = None  # in lbm/s or appropriate unit
+
+    def connect(self, other: "FlowPort"):
+        if type(self) == type(other):
+            raise PortTypeError("Cannot connect two ports of the same flow direction.")
+        if self.flow_node and other.flow_node:
+            if self.flow_node is not other.flow_node:
+                for port in other.flow_node.ports[:]:
+                    self.flow_node.connect(port)
+        elif self.flow_node:
+            self.flow_node.connect(other)
+        elif other.flow_node:
+            other.flow_node.connect(self)
+        else:
+            new_node = FlowNode()
+            new_node.connect(self)
+            new_node.connect(other)
+
+    def get_mass_flow(self) -> Optional[float]:
+        return self._mass_flow
+
+    def set_mass_flow(self, value: float):
+        self._mass_flow = value
+        if self.flow_node:
+            self.flow_node.compute_residual()
+
+    def __repr__(self):
+        return f"<{self.__class__.__name__} {self.name} of {self.owner.name}>"
+
+class InFlow(FlowPort):
+    pass
+
+class OutFlow(FlowPort):
+    pass
 

@@ -1,6 +1,6 @@
 import os
 import yaml
-from Core import InputPort, OutputPort
+from Core import InputPort, OutputPort, InFlow, OutFlow, FlowNode
 from prettytable import PrettyTable
 
 class System:
@@ -105,41 +105,88 @@ class System:
         if unmatched:
             print(f"[!] Warning: Could not find component(s) in system: {', '.join(unmatched)}")
 
-
-    def print_nodes(self):
-        """Pretty print all nodes in the system with their connected component and port counts."""
+    def node_summary(self):
+        """Pretty print all nodes in the system, including FlowNodes, with their connected component and port counts."""
         all_nodes = set()
 
         for component in self.components:
             for port in component.ports:
-                if port.node:
+                # Standard nodes
+                if hasattr(port, "node") and port.node:
                     all_nodes.add(port.node)
+                # Flow nodes
+                if hasattr(port, "flow_node") and port.flow_node:
+                    all_nodes.add(port.flow_node)
 
         table = PrettyTable()
         table.title = f"Nodes in System: {self.name}"
-        table.field_names = ["Node Name", "# Components", "# Ports"]
+        table.field_names = ["Node Name", "# Components", "# Ports", "Flow Node?"]
         table.align["Node Name"] = "l"
 
         for node in sorted(all_nodes, key=lambda n: n.name):
-            components = {p.owner for p in node.ports}
-            table.add_row([node.name, len(components), len(node.ports)])
+            ports = getattr(node, "ports", [])
+            components = {p.owner for p in ports}
+            is_flow_node = isinstance(node, FlowNode)
+            table.add_row([node.name, len(components), len(ports), "✓" if is_flow_node else ""])
 
-        print(table)
+        return table
+
+    def flow_node_summary(self):
+        """Pretty print all FlowNodes in the system with connected components and residuals."""
+        flow_nodes = set()
+
+        for component in self.components:
+            for port in component.ports:
+                if hasattr(port, "flow_node") and port.flow_node:
+                    flow_nodes.add(port.flow_node)
+
+        if not flow_nodes:
+            print(f"[i] No FlowNodes found in System: {self.name}")
+            return
+
+        table = PrettyTable()
+        table.title = f"Flow Nodes in System: {self.name}"
+        table.field_names = ["FlowNode Name", "# Components", "# Ports", "Mass Residual"]
+        table.align["FlowNode Name"] = "l"
+
+        for node in sorted(flow_nodes, key=lambda n: n.name):
+            ports = getattr(node, "ports", [])
+            components = {p.owner for p in ports}
+            residual = getattr(node, "residual", "—")
+            table.add_row([node.name, len(components), len(ports), f"{residual:.4f}" if isinstance(residual, (int, float)) else "—"])
+
+        return table
+
+    def config_summary(self) -> str:
+        """Print and return configuration summaries for all components in the system."""
+        summary_lines = [f"\n========== Configuration Summary: {self.name} ==========\n"]
+
+        for component in self.components:
+            component_summary = component.config_summary()
+            summary_lines.append(component_summary)
+            summary_lines.append("\n" + "=" * 60 + "\n")
+
+        full_summary = "\n".join(summary_lines)
+        #print(full_summary)
+        return full_summary
 
 
     def __str__(self):
         from prettytable import PrettyTable
         table = PrettyTable()
         table.title = f"System: {self.name}"
-        table.field_names = ["Component", "# Inputs", "# Outputs"]
+        table.field_names = ["Component", "# Inputs", "# Outputs", "# InFlows", "# OutFlows"]
         table.align["Component"] = "l"
 
         for comp in self.components:
             inputs = sum(isinstance(p, InputPort) for p in comp.ports)
             outputs = sum(isinstance(p, OutputPort) for p in comp.ports)
-            table.add_row([comp.name, inputs, outputs])
+            inflows = sum(isinstance(p, InFlow) for p in comp.ports)
+            outflows = sum(isinstance(p, OutFlow) for p in comp.ports)
+            table.add_row([comp.name, inputs, outputs, inflows, outflows])
 
         return str(table)
+
 
 
 
@@ -160,20 +207,26 @@ if __name__ == "__main__":
     injector.add_output("Oxidizer Temperature")
     injector.add_output("Oxidizer")
     injector.add_output("Fuel")
+    injector.add_outflow("Injector Outflow")
 
-    vespula.add_component(tca)
     tca.connect(injector)
-    print(vespula)
+    tca.connect_flow("TCA Inflow", injector, "Injector Outflow")
+    vespula.add_component(tca)
 
     #vespula.generate_configuration_template()
     vespula.read_configuration("/Users/saakethramramoju/Desktop/ROCETS DEV/Vespula Configuration.yaml")
-    tca.print_config_summary()
-    #injector.print_config_summary()
 
-    vespula.print_nodes()
+
     injector["CHamber pressure"] = 300
     tca["mixture ratio"] = 2
     injector["fuel"] = 'RP-1'
     injector["oxidizer"] = 'LOX'
-    print(tca)
-    print(tca.mass_conservation_equation())
+
+    tca.chamber_pressure_rayleigh()
+
+    print(vespula)
+    #print(vespula.config_summary())
+    #print(tca)
+    #print(vespula.flow_node_summary())
+    #print(vespula.node_summary())
+    #print(vespula.config_summary())

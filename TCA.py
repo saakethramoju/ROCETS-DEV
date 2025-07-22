@@ -46,6 +46,7 @@ class TCA(Component):
         self.add_input("Oxidizer Temperature (K)")
         self.add_input("Oxidizer")
         self.add_input("Fuel")
+        self.add_inflow("TCA Inflow")
 
         # Outputs:
 
@@ -89,6 +90,20 @@ class TCA(Component):
     
     def throat_area(self):
         return np.pi * (self["Throat Radius (in)"] ** 2)
+    
+    def chamber_pressure_rayleigh(self):
+        Pc = self["Chamber Pressure (psia)"]
+        mr = self._get_mixture_ratio()
+        cea = self.generate_cea()
+        if self['Combustor Area'].lower() == 'finite':
+            self.add_system_target("Chamber Pressure Rayleigh (psia)", None)
+            self["Chamber Pressure Rayleigh (psia)"] = Pc / cea.get_Pinj_over_Pcomb(Pc, mr, self["Contraction Ratio"])
+        else:
+            self.add_system_target("Chamber Pressure Rayleigh (psia)", None)
+            self["Chamber Pressure Rayleigh (psia)"] = self["Chamber Pressure (psia)"]
+
+        return self["Chamber Pressure Rayleigh (psia)"]
+       
 
     def generate_cea(self):
         """Create a CEA Object and calculate Rayleigh-corrected chamber pressure."""
@@ -101,8 +116,6 @@ class TCA(Component):
                 sonic_velocity_units='m/s', enthalpy_units='J/kg',
                 density_units='kg/m^3', fac_CR=self["Contraction Ratio"]
             )
-            self.add_system_key("Chamber Pressure Rayleigh (psia)", None)
-            self["Chamber Pressure Rayleigh (psia)"] = Pc / cea.get_Pinj_over_Pcomb(Pc, mr, self["Contraction Ratio"])
         else:
             cea = CEA_Obj(
                 oxName=self["Oxidizer"], fuelName=self["Fuel"], temperature_units='degK',
@@ -110,16 +123,18 @@ class TCA(Component):
                 sonic_velocity_units='m/s', enthalpy_units='J/kg',
                 density_units='kg/m^3'
             )
-            self.add_system_key("Chamber Pressure Rayleigh (psia)", None)
-            self["Chamber Pressure Rayleigh (psia)"] = self["Chamber Pressure (psia)"]
-
         self.cea = cea
         return cea
     
-    def mass_conservation_equation(self):
+    def mass_flow(self):
         mr = self["Mixture Ratio"]
         At = self.throat_area()
         cea = self.generate_cea()
         _, Tt, _ = cea.get_Temperatures(self["Chamber Pressure Rayleigh (psia)"], mr)
         mwt, gammat = cea.get_Throat_MolWt_gamma(self["Chamber Pressure Rayleigh (psia)"], mr)
         return (At * self["Chamber Pressure Rayleigh (psia)"] * 4.44822) * np.sqrt(mwt * gammat / (cs.R * Tt))
+    
+if __name__ == "__main__":
+
+    tca = TCA("Heatsink")
+    print(tca)
