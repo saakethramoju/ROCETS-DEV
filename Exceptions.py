@@ -1,28 +1,15 @@
-class MissingConfigurationError(Exception):
+class PortPermissionError(PermissionError):
+    """Raised when a value is set on a port that doesn't allow writes."""
     pass
 
-class MissingConfigurationKeyError(KeyError):
+class PortNotFoundError(KeyError):
+    """Raised when a port name lookup fails in a Component."""
     pass
 
-class MissingConfigurationValueError(ValueError):
+class PortKeyError(AttributeError):
+    """Raised when a port set call references a nonexistent attribute."""
     pass
 
-class MissingPortError(Exception):
-    pass
-
-class PortTypeError(Exception):
-    pass
-
-class MissingFlowPortError(Exception):
-    """Raised when no flow ports are available to connect."""
-    pass
-
-class FlowPortTypeError(Exception):
-    """Raised when trying to connect incompatible flow port types (e.g., two InFlows)."""
-    pass
-
-class MissingMixtureRatioError(Exception):
-    pass
-
-class MissingMassConservationEquation(Exception):
+class PortConnectionError(Exception):
+    """Raised when ports are already connected and connection is attempted again."""
     pass
