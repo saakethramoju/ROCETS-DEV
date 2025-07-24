@@ -6,6 +6,7 @@ from prettytable import PrettyTable
 from Exceptions import (PortNotFoundError, PortPermissionError, PortKeyError)
 from FlowPort import FlowPort, InFlow, OutFlow
 
+
 class Component:
     def __init__(self, name: str):
         self.name = name
@@ -91,21 +92,34 @@ class Component:
             matches = difflib.get_close_matches(self._normalize(my_port.name), other_in_dict.keys(), n=1, cutoff=cutoff)
             if matches:
                 my_port.connect(other_in_dict[matches[0]])
-
+    
     def __str__(self):
+        def format_val(val):
+            return f"{val:.3g}" if val is not None else "—"
+
         def build_table(ports, label):
             table = PrettyTable()
             table.title = f"{label} Ports for {self.name}"
-            table.field_names = ["Port", "Connected To"]
+            table.field_names = [
+                "Port", "Connected To", "Fluid", "Mass Flow (kg/s)", "Pressure (Pa)", "Temperature (K)"
+            ]
+
             table.align["Port"] = "l"
             table.align["Connected To"] = "l"
+            table.align["Fluid"] = "l"
+            table.align["Mass Flow (kg/s)"] = "r"
+            table.align["Pressure (Pa)"] = "r"
+            table.align["Temperature (K)"] = "r"
+
             for port in ports:
                 conn = port.connected_port
-                if conn:
-                    connected = f"{conn.name} [{conn.parent.name}]"
-                else:
-                    connected = "—"
-                table.add_row([port.name, connected])
+                connected = f"{conn.name} [{conn.parent.name}]" if conn and conn.parent else "—"
+                fluid_obj = getattr(port, "fluid", None) or getattr(getattr(port, "connected_port", None), "fluid", None)
+                fluid_name = getattr(fluid_obj, "name", "—")
+                mass_flow = format_val(port.mass_flow)
+                pressure = format_val(port.P)
+                temperature = format_val(port.T)
+                table.add_row([port.name, connected, fluid_name, mass_flow, pressure, temperature])
             return table
 
         inflows = [p for p in self.ports if isinstance(p, InFlow)]
@@ -120,20 +134,24 @@ class Component:
             f"{outflow_table}"
         )
 
+
 if __name__ == "__main__":
 
+    from Fluid import Fluid
 
     tca = Component("Heatsink")
     tca.add_inflow("Fuel Inflow")
     tca.add_inflow("Oxidizer Inflow")
 
     injector = Component("Coax")
-    injector.add_outflow("Fuel Outflow")
+    x = injector.add_outflow("Fuel Outflow")
     injector.add_outflow("Oxidizer Outflow")
     injector["Oxidizer outflow"].mass_flow = 3
     injector["fuel flow"].mass_flow = 1.5
+    injector["Fuel OutFlow"].fluid = Fluid("Methane", T = 100, X = 0.2)
 
     tca.connect(injector)
     print(tca)
+    print(x)
     #injector["Oxidizer outflow"].mass_flow = 5
     print(sum(tca.inlet_mass_flows()))

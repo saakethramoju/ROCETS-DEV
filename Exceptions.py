@@ -13,3 +13,9 @@ class PortKeyError(AttributeError):
 class PortConnectionError(Exception):
     """Raised when ports are already connected and connection is attempted again."""
     pass
+
+class FluidTypeError(ValueError):
+    pass
+
+class SaturationPropertyError(ValueError):
+    pass

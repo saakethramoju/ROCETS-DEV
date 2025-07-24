@@ -1,5 +1,6 @@
 
 from typing import TYPE_CHECKING
+from Fluid import Fluid
 from Exceptions import (PortPermissionError, PortConnectionError)
 
 if TYPE_CHECKING:
@@ -11,7 +12,7 @@ class FlowPort:
         self._P = None
         self._T = None
         self._mass_flow = None
-        self.fluid = None
+        self.fluid: Fluid = None
         self.connected_port: "FlowPort" = None
 
     def connect(self, other: "FlowPort"):
@@ -79,19 +80,27 @@ class FlowPort:
         conn = self.connected_port
         conn_str = f"{conn.name} [{conn.parent.name}]" if conn and conn.parent else "—"
         status = "Connected" if conn else "Unconnected"
+
+        # Fluid name: prefer self.fluid, fallback to connected port's fluid
+        fluid_obj = self.fluid or (conn.fluid if conn else None)
+        fluid_name = getattr(fluid_obj, "name", "—")
+
         try:
             pressure = f"{self.P:.3g}" if self.P is not None else "—"
             temperature = f"{self.T:.3g}" if self.T is not None else "—"
             mass_flow = f"{self.mass_flow:.3g}" if self.mass_flow is not None else "—"
         except RecursionError:
             pressure = temperature = mass_flow = "ERR"
+
         return (
             f"{direction} '{self.name}' of {parent_name}:\n"
-            f"  Connected To: {conn_str} ({status})\n"
-            f"  Pressure    : {pressure} Pa\n"
-            f"  Temperature : {temperature} K\n"
-            f"  Mass Flow   : {mass_flow} kg/s"
+            f"  Connected To  : {conn_str} ({status})\n"
+            f"  Fluid         : {fluid_name}\n"
+            f"  Pressure      : {pressure} Pa\n"
+            f"  Temperature   : {temperature} K\n"
+            f"  Mass Flow     : {mass_flow} kg/s"
         )
+
 
 
 

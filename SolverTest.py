@@ -1,6 +1,7 @@
 import cantera as ct
 import numpy as np
 from scipy.optimize import root
+from rocketprops.rocket_prop import get_prop
 
 def pipe01(mdot_guess_array, Cd, A, P1, T1, P2, T2):
     """Mass flow residual function for root-finding (mdot iteration)"""
@@ -32,7 +33,10 @@ P2 = 101325  # Pa
 T2 = 300  # K
 
 # Solve using scipy.root
-sol = root(pipe01, x0=[1.0], args=(Cd, A, P1, T1, P2, T2))
+#sol = root(pipe01, x0=[1.0], args=(Cd, A, P1, T1, P2, T2))
 
-print(f"Success: {sol.success}")
-print(f"mdot: {sol.x[0]:.6f} kg/s")
+#print(f"Success: {sol.success}")
+#print(f"mdot: {sol.x[0]:.6f} kg/s")
+
+rp1 = get_prop.Pr
+print(rp1.set_std_state())
