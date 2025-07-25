@@ -14,6 +14,144 @@ class Component:
     def __init__(self, name: str):
         self.name = name
         self.ports: List[Union[FlowPort, PropertyPort]] = []
+        self._guesses: dict[tuple[str, str], float] = {}  # (port_name, var_name) → guess
+
+    def set_guess(self, port_name: str, var_name: str, value: float):
+        """
+        Store a guess for a specific variable on a port.
+        """
+        self._guesses[(port_name, var_name)] = value
+
+    def apply_guesses(self):
+        """
+        Apply only those guesses that match the component's iteration variables.
+        """
+        for port_name, var in self.detect_iteration_variables():
+            key = (port_name, var)
+            if key in self._guesses:
+                port = self[port_name]
+                setattr(port, var, self._guesses[key])
+
+
+    def residual(self, x):
+        raise NotImplementedError(f"{self.__class__.__name__}.residual(x) must be implemented in a subclass.")
+
+    def detect_iteration_variables(self):
+        """
+        Detect iteration variables on OutFlow ports based on the following rules:
+
+        1. If component has only OutFlows:
+        - If mass_flow is set and fluid is under-defined → iterate on T and P
+        - If fluid is defined (fluid_name + 2 of T/P/X) but mass_flow is missing → iterate on mass_flow
+        - If both are defined → no iteration variable
+
+        2. If component has InFlows and OutFlows:
+        - If OutFlow has no fluid and no mass_flow → iterate on T and P
+        - If fluid is defined and mass_flow is missing → no iteration variable
+        - If mass_flow is set but fluid is under-defined:
+            - Only iterate on T and P if at least one other port (InFlow or OutFlow) is missing mass_flow
+            - Otherwise, no iteration variable
+        """
+        if hasattr(self, "_iteration_variables") and self._iteration_variables:
+            return self._iteration_variables
+
+        self._iteration_variables = []
+
+        inflows = [p for p in self.ports if isinstance(p, InFlow)]
+        outflows = [p for p in self.ports if isinstance(p, OutFlow)]
+
+        has_inflows = len(inflows) > 0
+        has_outflows = len(outflows) > 0
+
+        for port in outflows:
+            name = port.name
+            mass_flow = port.mass_flow
+            fluid_name = port.fluid_name
+            T, P, X = port.T, port.P, port.X
+
+            state = {'T': T, 'P': P, 'X': X}
+            defined_state = [k for k, v in state.items() if v is not None]
+            num_state_vars = len(defined_state)
+            fluid_defined = fluid_name is not None and num_state_vars >= 2
+
+            # ------------------------------
+            # CASE: component has only OutFlows
+            # ------------------------------
+            if has_outflows and not has_inflows:
+                if mass_flow is not None and not fluid_defined:
+                    # Rule 1a
+                    for attr in ['T', 'P']:
+                        if state[attr] is None:
+                            self._iteration_variables.append((name, attr))
+                elif fluid_defined and mass_flow is None:
+                    # Rule 1b
+                    self._iteration_variables.append((name, "mass_flow"))
+                # else: both defined → Rule 2 → no iteration variables
+
+            # ------------------------------
+            # CASE: component has both InFlows and OutFlows
+            # ------------------------------
+            elif has_inflows and has_outflows:
+                if mass_flow is None and not fluid_defined:
+                    # Rule 3
+                    for attr in ['T', 'P']:
+                        if state[attr] is None:
+                            self._iteration_variables.append((name, attr))
+                elif fluid_defined and mass_flow is None:
+                    # Rule 4 → nothing to iterate
+                    continue
+                elif mass_flow is not None and not fluid_defined:
+                    # Rule 5 → check other ports for unset mass flow
+                    others = [p for p in self.ports if p is not port and isinstance(p, FlowPort)]
+                    missing_mdot_elsewhere = any(p.mass_flow is None for p in others)
+                    if missing_mdot_elsewhere:
+                        for attr in ['T', 'P']:
+                            if state[attr] is None:
+                                self._iteration_variables.append((name, attr))
+                    # else: all other mass flows defined → nothing to iterate
+
+        return self._iteration_variables
+    
+    def get_upstream_iterations(self, port_name=None):
+        """
+        If `port_name` is given:
+            → Returns a list of iteration variable names (e.g. ['mass_flow', 'T']).
+
+        If `port_name` is None:
+            → Returns a dict mapping each InFlow name to a list of iteration variable names.
+
+        Example:
+            pipe.get_upstream_iterations("Source")
+                → ['mass_flow']
+
+            pipe.get_upstream_iterations()
+                → {'Source': ['mass_flow']}
+        """
+        results = {}
+
+        inflows = [p for p in self.ports if isinstance(p, InFlow)]
+
+        for inflow in inflows:
+            if port_name and inflow.name != port_name:
+                continue
+
+            upstream = inflow.connected_port
+            if upstream and upstream.parent:
+                try:
+                    upstream_vars = [
+                        var for pname, var in upstream.parent.detect_iteration_variables()
+                        if pname == upstream.name
+                    ]
+                except Exception as e:
+                    upstream_vars = [f"Error: {e}"]
+            else:
+                upstream_vars = []
+
+            results[inflow.name] = upstream_vars
+
+        if port_name:
+            return results.get(port_name, [])
+        return results
 
     def inlet_mass_flows(self) -> list[float]:
         return [
@@ -245,8 +383,11 @@ if __name__ == "__main__":
     injector.connect_all(tca)
     print(injector)
 
-    #injector["fuel flow"].fluid = Fluid("Methane", T=90, P=1e6)
-    injector["fuel flow"].P = 1e6
-    injector["fuel flow"].T = 100
-    injector["fuel flow"].fluid_name = "Methane"
-    print(tca)
+    injector["fuel flow"].fluid = Fluid("Methane", T=100, P=1e6)
+    injector["oxidizer flow"].fluid = Fluid("Oxygen", T=90, P=1e6)
+    #injector["fuel flow"].P = 1e6
+    #injector["fuel flow"].T = 100
+    #injector["fuel flow"].fluid_name = "Methane"
+    print(tca.detect_iteration_variables())
+    print(injector["oxidizer flow"])
+    print(injector["oxidizer flow"].fluid)

@@ -10,8 +10,8 @@ class Fluid:
         - P: pressure [Pa]
         - X: vapor quality [0–1] (only for two-phase fluids)
         """
-        self.name = name
-        self._state = {}
+        self.name = name # Read only
+        self._state = {} # Reado only
         self._build_state(name, T, P, X)
 
     def _build_state(self, name, T, P, X):
@@ -121,11 +121,10 @@ class Fluid:
         """Maximum pressure CoolProp supports for this fluid."""
         return PropsSI("Pmax", self.name)
 
-
     def summary(self) -> dict:
-        def safe(prop_fn):
+        def safe(fn):
             try:
-                return prop_fn()
+                return fn()
             except:
                 return "N/A"
 
@@ -135,14 +134,14 @@ class Fluid:
             "Pressure (Pa)": self.pressure,
             "Vapor Quality": self.quality,
             "Phase": self.phase,
-            "Density (kg/m³)": safe(self.density),
-            "Enthalpy (J/kg)": safe(self.enthalpy),
-            "Viscosity (Pa·s)": safe(self.viscosity),
-            "Cp (J/kg·K)": safe(self.cp),
-            "Saturation Pressure (Pa)": safe(self.saturation_pressure),
-            "Saturation Temperature (K)": safe(self.saturation_temperature),
-            "Critical Temperature (K)": safe(self.critical_temperature),
-            "Critical Pressure (Pa)": safe(self.critical_pressure),
+            "Density (kg/m³)": safe(lambda: self.density),
+            "Enthalpy (J/kg)": safe(lambda: self.enthalpy),
+            "Viscosity (Pa·s)": safe(lambda: self.viscosity),
+            "Cp (J/kg·K)": safe(lambda: self.cp),
+            "Saturation Pressure (Pa)": safe(lambda: self.saturation_pressure),
+            "Saturation Temperature (K)": safe(lambda: self.saturation_temperature),
+            "Critical Temperature (K)": safe(lambda: self.critical_temperature),
+            "Critical Pressure (Pa)": safe(lambda: self.critical_pressure),
         }
 
     def __str__(self):
