@@ -3,7 +3,7 @@ from Fluid import Fluid
 from Exceptions import PortPermissionError, PortConnectionError
 
 if TYPE_CHECKING:
-    from Component import Component
+    from Components.Component import Component
 class FlowPort:
     def __init__(self, name: str, parent: "Component" = None):
         self.name = name

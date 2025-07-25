@@ -1,7 +1,7 @@
 from typing import Optional, TYPE_CHECKING
 from prettytable import PrettyTable
 if TYPE_CHECKING:
-    from Component import Component
+    from Components import Component
 
 
 class PropertyPort:

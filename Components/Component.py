@@ -5,8 +5,8 @@ from typing import List, Union
 from prettytable import PrettyTable
 from Exceptions import (PortNotFoundError, PortPermissionError, PortKeyError,
                         PortConnectionError)
-from FlowPort import FlowPort, InFlow, OutFlow
-from PropertyPort import PropertyPort, PropertyIn, PropertyOut
+from Ports import FlowPort, InFlow, OutFlow
+from Ports import PropertyPort, PropertyIn, PropertyOut
 from Fluid import Fluid
 
 class Component:

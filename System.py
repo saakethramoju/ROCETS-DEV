@@ -1,6 +1,6 @@
-from FlowPort import InFlow, OutFlow
-from PropertyPort import PropertyIn, PropertyOut
-from Component import Component
+from Ports import InFlow, OutFlow
+from Ports import PropertyIn, PropertyOut
+from Components import Component
 import os
 import yaml
 import difflib
@@ -255,37 +255,23 @@ class System:
         return res
 
 
+    def solve(self, method="hybr", tol=1e-6, maxfev=1000, verbose=True):
+        self.apply_inputs()
 
-    def solve(self, method="hybr", tol=1e-6, verbose=True):
-        """
-        Solve all components in the system using scipy.optimize.root.
+        if not self.get_iteration_keys():
+            raise RuntimeError("[System] No iteration variables detected. Nothing to solve.")
 
-        Automatically:
-        - Builds the full iteration vector
-        - Applies it to the system
-        - Computes residuals from each component
-        - Updates ports after convergence
-
-        Parameters:
-            method: str
-                Solver method (e.g., 'hybr', 'lm', etc.)
-            tol: float
-                Convergence tolerance
-            verbose: bool
-                Print status and result
-
-        Returns:
-            OptimizeResult from scipy.optimize.root
-        """
         x0 = self.get_iteration_vector()
 
         def residual(x):
             self.set_iteration_vector(x)
             return self.residual(x)
 
-        result = root(residual, x0, method=method, tol=tol)
+        try:
+            result = root(residual, x0, method=method, tol=tol, options={"maxfev": maxfev})
+        except Exception as e:
+            raise RuntimeError(f"[System] Solver failed due to: {e}")
 
-        # Apply final solution to all ports once
         self.set_iteration_vector(result.x)
 
         if verbose:
@@ -293,15 +279,21 @@ class System:
             print("Status:", result.message)
             print("Success:", result.success)
             print("Final x:", result.x)
+            #print("Final residuals:", [f"{r:.3e}" for r in self.residual(result.x)])
+
+        if not result.success:
+            print("[!] Warning: Solver did not converge to a solution.")
 
         return result
 
 
 
 
+
+
 if __name__ == "__main__":
 
-    from Component import Component
+    from Components import Component, Inlet, Outlet
     from Fluid import Fluid
     import numpy as np
     from scipy.optimize import root
@@ -371,18 +363,18 @@ if __name__ == "__main__":
     pipe = PipeTest("pipe", Cd=0.6, A=8e-5)
 
     # Define inlet and outlet
-    inlet = Component("Inlet")
-    inlet.add_outflow("Source")
+    inlet = Inlet("Inlet", "Source")
+    #inlet.add_outflow("Source")
     inlet["Source"].fluid = Fluid("Water", T=298, P=3e6)  # No mass flow yet
     #inlet["Source"].mass_flow = 5
 
-    outlet = Component("Outlet")
-    outlet.add_inflow("Drain")
+    outlet = Outlet("Outlet", "Drain")
+    #outlet.add_inflow("Drain")
     outlet["Drain"].T = 298
     outlet["Drain"].P = 101325
     #outlet["Drain"].mass_flow = 5
 
-    inlet.provides_inputs_only = True
+    #inlet.provides_inputs_only = True
     #outlet.provides_inputs_only = True
 
     # Connect components
@@ -406,7 +398,7 @@ if __name__ == "__main__":
     #EngineSystem.show_connections()
     #EngineSystem.generate_input_template()
     EngineSystem.load_inputs("/Users/saakethramramoju/Desktop/ROCETS DEV/Vespula_Inputs.yaml")
-    EngineSystem.apply_inputs()
+    #EngineSystem.apply_inputs()
 
     
     #print(inlet)
