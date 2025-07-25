@@ -9,32 +9,67 @@ from FlowPort import FlowPort, InFlow, OutFlow
 from PropertyPort import PropertyPort, PropertyIn, PropertyOut
 from Fluid import Fluid
 
-
 class Component:
     def __init__(self, name: str):
         self.name = name
         self.ports: List[Union[FlowPort, PropertyPort]] = []
-        self._guesses: dict[tuple[str, str], float] = {}  # (port_name, var_name) → guess
+        self._inputs: dict[tuple[str, str], float] = {}  # (port_name, var_name) → input value
+        self.system = None
+        self.provides_inputs_only = False
 
-    def set_guess(self, port_name: str, var_name: str, value: float):
-        """
-        Store a guess for a specific variable on a port.
-        """
-        self._guesses[(port_name, var_name)] = value
+    def residual(self, x):
+        if self.provides_inputs_only:
+            return []  # Safe to ignore
+        if self.get_iteration_keys():
+            raise NotImplementedError(
+                f"{self.__class__.__name__}.residual(x) must be implemented for components with iteration variables."
+            )
+        return []
 
-    def apply_guesses(self):
+
+    def get_iteration_keys(self) -> list[tuple[str, str]]:
+        return self.detect_iteration_variables()
+
+
+    def get_iteration_vector(self) -> list[float]:
+        """Return current values of iteration variables as a flat vector."""
+        return [
+            getattr(self[port_name], var)
+            for (port_name, var) in self.get_iteration_keys()
+        ]
+
+
+    def set_iteration_vector(self, x: list[float]):
         """
-        Apply only those guesses that match the component's iteration variables.
+        Set current values of iteration variables from a flat vector.
+        Used by the solver to inject updated guesses.
+        """
+        keys = self.get_iteration_keys()
+        if len(x) != len(keys):
+            raise ValueError(
+                f"{self.name}: Input vector length {len(x)} doesn't match "
+                f"number of iteration variables {len(keys)}"
+            )
+        for (val, (port_name, var)) in zip(x, keys):
+            setattr(self[port_name], var, val)
+
+
+    def set_input(self, port_name: str, var_name: str, value: float):
+        """
+        Store an input value for a specific variable on a port.
+        """
+        self._inputs[(port_name, var_name)] = value
+
+    def apply_inputs(self):
+        """
+        Apply only those inputs that match the component's iteration variables.
         """
         for port_name, var in self.detect_iteration_variables():
             key = (port_name, var)
-            if key in self._guesses:
+            if key in self._inputs:
                 port = self[port_name]
-                setattr(port, var, self._guesses[key])
+                setattr(port, var, self._inputs[key])
 
-
-    def residual(self, x):
-        raise NotImplementedError(f"{self.__class__.__name__}.residual(x) must be implemented in a subclass.")
 
     def detect_iteration_variables(self):
         """
@@ -277,6 +312,13 @@ class Component:
             if matches:
                 my_port.connect(other_in_dict[matches[0]])
 
+        # 🔁 Auto-refresh system membership
+        if self.system and other.system is not self.system:
+            self.system.add_component(other)
+        elif other.system and self.system is not other.system:
+            other.system.add_component(self)
+
+
     def connect_all(self, other: "Component", cutoff: float = 0.6):
         self.connect(other, cutoff=cutoff)
 
@@ -311,6 +353,13 @@ class Component:
                 other_in = other_in_dict[match]
                 if not other_in.is_connected:
                     my_out.connect(other_in)
+
+        # 🔁 Auto-refresh system membership
+        if self.system and other.system is not self.system:
+            self.system.add_component(other)
+        elif other.system and self.system is not other.system:
+            other.system.add_component(self)
+
 
     def __str__(self):
         def format_val(val):
