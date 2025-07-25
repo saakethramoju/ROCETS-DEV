@@ -98,6 +98,10 @@ print(pipe.detect_iteration_variables())
 print(outlet.detect_iteration_variables())
 
 print(pipe.get_upstream_iterations())
+inlet.set_guess("Source", "mass_flow", 5.0)
+print(inlet["Source"].mass_flow)
+inlet.apply_guesses()
+print(inlet["Source"].mass_flow) 
 print(pipe.residual())
 # Solve for mass flow
 #mdot_solution = pipe.solve()
