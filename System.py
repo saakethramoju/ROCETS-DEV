@@ -114,7 +114,7 @@ class System:
 
         for comp in self.components:
             comp_label = comp.name.replace("_", " ").title()
-            iters = comp.detect_iteration_variables()
+            iters = comp.iteration_vars()
 
             for port_name, var_key in iters:
                 port_label = port_name.replace("_", " ").title()
@@ -357,9 +357,48 @@ if __name__ == "__main__":
 
             residual = mdot2 - mdot1
             return [residual]
+                        
+        def iteration_vars(self):
+            drain = self["Drain"]
+            source = self["Source"]
+
+            # If T and P are defined for both Source and Drain → nothing to solve
+            if source.T is not None and source.P is not None and drain.T is not None and drain.P is not None:
+                return []
+
+            # If either is missing (they're always paired), solve for both
+            return [("Drain", "T"), ("Drain", "P")]
 
 
 
+    pipe = PipeTest("pipe", Cd=0.6, A=8e-5)
+
+    inlet = Inlet("Inlet", "Source")
+    inlet["Source"].fluid = Fluid("Water", T=298, P=3e6)  # No mass flow yet
+
+
+    outlet = Outlet("Outlet", "Drain")
+    outlet["Drain"].T = 298
+    outlet["Drain"].P = 101325
+
+    pipe.connect(inlet)
+    pipe.connect(outlet)
+
+
+    EngineSystem = System("Vespula")
+    EngineSystem.add_component(pipe)
+
+    #EngineSystem.generate_input_template()
+
+    EngineSystem.load_inputs("/Users/saakethramramoju/Desktop/ROCETS DEV/Vespula_Inputs.yaml")
+
+    
+    result = EngineSystem.solve()
+
+
+
+
+    """
     pipe = PipeTest("pipe", Cd=0.6, A=8e-5)
 
     # Define inlet and outlet
@@ -424,3 +463,4 @@ if __name__ == "__main__":
     #mdot_solution = pipe.solve()
     #inlet["Source"].mass_flow = mdot_solution
     #print(f"Solved mass flow: {mdot_solution:.4f} kg/s")'''
+    """

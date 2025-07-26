@@ -10,3 +10,11 @@ class Inlet(Component):
     def residual(self, x):
         # No residuals — boundary condition only
         return []
+
+    def iteration_vars(self):
+        out = self.ports[0]
+        if out.fluid is not None and out.fluid.is_defined():
+            return [(out.name, "mass_flow")]
+        else:
+            return [(out.name, "T"), (out.name, "P")]
+

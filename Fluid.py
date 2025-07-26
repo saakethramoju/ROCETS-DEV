@@ -149,3 +149,12 @@ class Fluid:
 
     def __repr__(self):
         return f"<Fluid {self.name} | T={self.temperature} K, P={self.pressure} Pa, X={self.quality}>"
+        
+    def is_defined(self) -> bool:
+        """
+        Return True if the fluid state is valid (i.e., created from exactly two of T, P, X).
+        """
+        return (
+            self.name is not None and
+            sum(v is not None for v in [self.temperature, self.pressure, self.quality]) >= 2
+        )
