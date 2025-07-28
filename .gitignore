@@ -13,3 +13,4 @@ venv/
 
 # System files
 .DS_Store
+__pycache__/Fluid.cpython-313.pyc
