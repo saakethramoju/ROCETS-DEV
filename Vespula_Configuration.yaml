@@ -1,6 +1,0 @@
-# Configuration Template for Vespula
-# Fill in required configuration parameters for each component.
-
-pipe:
-  Discharge Coefficient: 0.6
-  Cross-sectional Area (sq. m.): 8.0e-5

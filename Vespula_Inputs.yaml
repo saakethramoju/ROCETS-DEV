@@ -1,6 +1,0 @@
-# Input Template for Initial Guesses: Vespula
-# Fill in desired initial guesses for iteration variables.
-
-Inlet:
-  Source:
-    Mass Flow (kg/s): 0.01
