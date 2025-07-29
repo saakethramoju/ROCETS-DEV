@@ -1,12 +1,15 @@
 from __future__ import annotations
-from typing import Optional, Iterable, List
+from typing import Optional, Iterable, List, TYPE_CHECKING
 from Fluid import Fluid
+
+if TYPE_CHECKING:
+    from .FlowPort import FlowPort
 
 
 class FlowNode:
     """
-    Shared thermodynamic state (T, P, X, fluid_name) between exactly two FlowPorts.
-    Mass flow is NOT stored here, but accessible from connected ports.
+    Shared fluid state between two ports.
+    Carries one Fluid object that obeys two-input constraint.
     """
     _counter = 0
 
@@ -14,45 +17,84 @@ class FlowNode:
         self.name = f"node_{FlowNode._counter}"
         FlowNode._counter += 1
 
-        self._fluid_name: Optional[str] = None
-        self._T: Optional[float] = None
-        self._P: Optional[float] = None
-        self._X: Optional[float] = None
-
         self._ports: List[FlowPort] = []
+        self._fluid: Optional[Fluid] = None
 
-        if fluid_a and fluid_b:
-            if fluid_a.name != fluid_b.name:
-                raise ValueError("Connected fluids must be of the same type.")
-            self._fluid_name = fluid_a.name
-            self._T = self._coalesce(fluid_a.temperature, fluid_b.temperature)
-            self._P = self._coalesce(fluid_a.pressure, fluid_b.pressure)
-            self._X = self._coalesce_nullable(fluid_a.quality, fluid_b.quality)
+        # Decide which fluid to adopt
+        self._fluid = self._resolve_fluid(fluid_a, fluid_b)
 
-    # -------- registration --------
+    def _resolve_fluid(self, a: Optional[Fluid], b: Optional[Fluid]) -> Optional[Fluid]:
+        if a and b:
+            # Prioritize b (typically OutFlow), replace a
+            return b
+        return a or b
+
+    # -------- Register ports --------
 
     def register_ports(self, *ports: Iterable[FlowPort]) -> None:
         for p in ports:
             if p not in self._ports:
                 self._ports.append(p)
+                p._node = self
+                p._fluid = self._fluid  # Share fluid reference
 
-    # -------- getters --------
-
-    @property
-    def T(self) -> Optional[float]:
-        return self._T
+    # -------- Fluid interface --------
 
     @property
-    def P(self) -> Optional[float]:
-        return self._P
+    def fluid(self) -> Optional[Fluid]:
+        return self._fluid
 
-    @property
-    def X(self) -> Optional[float]:
-        return self._X
+    @fluid.setter
+    def fluid(self, f: Fluid) -> None:
+        self._fluid = f
+        for p in self._ports:
+            p.fluid = f
 
     @property
     def fluid_name(self) -> Optional[str]:
-        return self._fluid_name
+        return self._fluid.name if self._fluid else None
+
+    @property
+    def T(self) -> Optional[float]:
+        return self._fluid.T if self._fluid else None
+
+    @T.setter
+    def T(self, value: float) -> None:
+        if not self._fluid:
+            raise ValueError("No fluid available to set T.")
+        self._fluid.T = value
+
+    @property
+    def P(self) -> Optional[float]:
+        return self._fluid.P if self._fluid else None
+
+    @P.setter
+    def P(self, value: float) -> None:
+        if not self._fluid:
+            raise ValueError("No fluid available to set P.")
+        self._fluid.P = value
+
+    @property
+    def X(self) -> Optional[float]:
+        return self._fluid.X if self._fluid else None
+
+    @X.setter
+    def X(self, value: float) -> None:
+        if not self._fluid:
+            raise ValueError("No fluid available to set X.")
+        self._fluid.X = value
+
+    # -------- Adoption logic --------
+
+    def set_from_fluid(self, fluid: Fluid) -> None:
+        self.fluid = fluid  # will push to all ports
+
+    def adopt_from_port(self, port: FlowPort) -> None:
+        if not port.fluid:
+            return
+        self.fluid = port.fluid  # Shared across all
+
+    # -------- Mass flow helpers --------
 
     @property
     def port_mass_flows(self) -> List[Optional[float]]:
@@ -60,102 +102,28 @@ class FlowNode:
 
     @property
     def inlet_mass_flow(self) -> Optional[float]:
-        return self._get_port_mass_flow_by_type("in")
+        return self._get_port_mass_flow("InFlow")
 
     @property
     def outlet_mass_flow(self) -> Optional[float]:
-        return self._get_port_mass_flow_by_type("out")
+        return self._get_port_mass_flow("OutFlow")
 
-    def _get_port_mass_flow_by_type(self, kind: str) -> Optional[float]:
+    def _get_port_mass_flow(self, role: str) -> Optional[float]:
         for p in self._ports:
-            if kind == "in" and p.__class__.__name__ == "InFlow":
-                return p.mass_flow
-            if kind == "out" and p.__class__.__name__ == "OutFlow":
+            if p.__class__.__name__ == role:
                 return p.mass_flow
         return None
 
-    # -------- setters (authoritative, push to ports) --------
-
-    def set_T(self, T: float) -> None:
-        self._T = T
-        self._push_to_ports()
-
-    def set_P(self, P: float) -> None:
-        self._P = P
-        self._push_to_ports()
-
-    def set_X(self, X: float) -> None:
-        self._X = X
-        self._push_to_ports()
-
-    def set_state(
-        self,
-        *,
-        T: Optional[float] = None,
-        P: Optional[float] = None,
-        X: Optional[float] = None,
-        fluid_name: Optional[str] = None,
-    ) -> None:
-        if fluid_name is not None:
-            self._fluid_name = fluid_name
-        if T is not None:
-            self._T = T
-        if P is not None:
-            self._P = P
-        if X is not None:
-            self._X = X
-        self._push_to_ports()
-
-    def set_from_fluid(self, fluid: Fluid) -> None:
-        self.set_state(
-            T=fluid.temperature,
-            P=fluid.pressure,
-            X=fluid.quality,
-            fluid_name=fluid.name,
-        )
-
-    def adopt_from_port(self, port: FlowPort) -> None:
-        self.set_state(
-            T=port.T if port.T is not None else self._T,
-            P=port.P if port.P is not None else self._P,
-            X=port.X if port.X is not None else self._X,
-            fluid_name=port._fluid_name or self._fluid_name,
-        )
-
-    # -------- internals --------
-
-    def _push_to_ports(self) -> None:
-        for p in self._ports:
-            p._apply_node_state(
-                T=self._T,
-                P=self._P,
-                X=self._X,
-                fluid_name=self._fluid_name,
-            )
-
-    @staticmethod
-    def _coalesce(a: Optional[float], b: Optional[float]) -> Optional[float]:
-        if a is not None and b is not None:
-            return 0.5 * (a + b)
-        return a if a is not None else b
-
-    @staticmethod
-    def _coalesce_nullable(a: Optional[float], b: Optional[float]) -> Optional[float]:
-        return FlowNode._coalesce(a, b)
-
-    # -------- repr/str --------
+    # -------- Repr / Str --------
 
     def __repr__(self) -> str:
-        return f"<FlowNode {self.name} | T={self.T}, P={self.P}, X={self.X}>"
+        return f"<FlowNode {self.name} | fluid={self.fluid_name}, T={self.T}, P={self.P}, X={self.X}>"
 
     def __str__(self) -> str:
         return (
             f"FlowNode('{self.name}')\n"
-            f"  T = {self.T} K\n"
-            f"  P = {self.P} Pa\n"
-            f"  X = {self.X}"
+            f"  Fluid     = {self.fluid_name}\n"
+            f"  T         = {self.T} K\n"
+            f"  P         = {self.P} Pa\n"
+            f"  X         = {self.X}"
         )
-
-
-# ✅ Delayed import to resolve circular dependency
-from .FlowPort import FlowPort
