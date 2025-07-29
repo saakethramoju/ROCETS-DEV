@@ -3,7 +3,7 @@ from abc import ABC, abstractmethod
 from typing import Optional, TYPE_CHECKING
 
 from .FlowNode import FlowNode
-from Fluid import Fluid
+from Fluids import Fluid
 
 if TYPE_CHECKING:
     from Components.Component import Component

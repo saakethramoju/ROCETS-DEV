@@ -20,6 +20,10 @@ class Fluid:
         self._set_inputs(T, P, X)
         self._update_state()
 
+    @property
+    def is_mixture(self) -> bool:
+        return False
+
     def _set_inputs(self, T, P, X):
         if (T is not None) + (P is not None) + (X is not None) != 2:
             raise ValueError("Exactly two of T, P, X must be provided.")
@@ -95,13 +99,21 @@ class Fluid:
     def viscosity(self): return self._prop("V")
 
     @property
-    def cp(self): return self._prop("C")
+    def cp(self):
+        value = self._prop("C")
+        if value is None or value <= 0 or value != value:  # check for NaN using value != value
+            return float("nan")
+        return value
 
     @property
     def thermal_conductivity(self): return self._prop("L")
 
     @property
-    def prandtl(self): return self._prop("PRANDTL")
+    def prandtl(self):
+        value = self._prop("PRANDTL")
+        if value is None or value <= 0 or value != value:
+            return float("nan")
+        return value
 
     @property
     def speed_of_sound(self): return self._prop("A")
@@ -148,6 +160,10 @@ class Fluid:
     @property
     def max_pressure(self): return PropsSI("PMAX", "", 0, "", 0, self.name)
 
+    @property
+    def coolprop_name(self) -> str:
+        return self.name  # for single-fluid cases
+
     def __repr__(self):
         state_desc = ', '.join(f"{k}={getattr(self, '_'+k)}" for k in self._input_pair)
         return f"<Fluid({self.name}): {state_desc}>"
@@ -164,6 +180,7 @@ class Fluid:
             if isinstance(val, (float, int)):
                 return f"{val:.{precision}f} {unit}".rstrip()
             return f"{val} {unit}".rstrip()
+        
 
         summary = [
             f"Fluid: {self.name}",

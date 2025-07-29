@@ -1,7 +1,7 @@
-from Fluid import Fluid
+from Fluids import Fluid, Mixture
 from Ports import InFlow, OutFlow
 from Components import Component, MassFlowOutlet, MassFlowInlet, FluidStateInlet, FluidStateOutlet
-
+'''
 f = Fluid("Water", P=2e6, X = 0.5)
 print(f)
 
@@ -54,4 +54,12 @@ print(inlet["source"])
 print(outlet["source"])
 inlet["source"].fluid.set_state(T=100, X=0.4)
 print(inlet["source"])
-print(outlet["source"].fluid)
+print(outlet["source"].fluid)'''
+
+mix = Mixture({"Methane": 0.6, "Ethane": 0.4}, fraction_type="mole", T=300, P=101325)
+
+
+print(mix) # slow by nature
+mix.set_state(P=2e6, X = 0.4)
+print("---------------------------------")
+print(mix)

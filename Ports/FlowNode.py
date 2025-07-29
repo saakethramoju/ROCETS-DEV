@@ -1,6 +1,6 @@
 from __future__ import annotations
 from typing import Optional, Iterable, List, TYPE_CHECKING
-from Fluid import Fluid
+from Fluids import Fluid
 
 if TYPE_CHECKING:
     from .FlowPort import FlowPort
