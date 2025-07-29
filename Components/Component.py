@@ -72,7 +72,6 @@ class Component:
 
 
 
-
     def __str__(self) -> str:
         inflow_table = PrettyTable()
         outflow_table = PrettyTable()
@@ -84,7 +83,7 @@ class Component:
             inflow_table.add_row([
                 port_name,
                 port.connected_port.name if port.connected_port else "-",
-                port._fluid_name,
+                port.fluid_name,
                 port.T if port.T is not None else "-",
                 port.P if port.P is not None else "-",
                 port.X if port.X is not None else "-",
@@ -95,21 +94,19 @@ class Component:
             outflow_table.add_row([
                 port_name,
                 port.connected_port.name if port.connected_port else "-",
-                port._fluid_name,
+                port.fluid_name,
                 port.T if port.T is not None else "-",
                 port.P if port.P is not None else "-",
                 port.X if port.X is not None else "-",
                 port.mass_flow if port.mass_flow is not None else "-"
             ])
 
-        # Format the header nicely with even padding
         title = f" COMPONENT: {self.name} "
         box_width = max(len(title), 30)
         border = "═" * box_width
         centered_title = title.center(box_width)
 
         header = f"╔{border}╗\n║{centered_title}║\n╚{border}╝"
-
         return f"{header}\n\nInlets:\n{inflow_table}\n\nOutlets:\n{outflow_table}"
 
     def __repr__(self) -> str:

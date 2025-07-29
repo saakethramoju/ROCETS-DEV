@@ -200,3 +200,22 @@ class Fluid:
         add_line("Max Pressure [Pa]:", self.max_pressure, precision=2)
 
         return "\n".join(summary)
+            
+    def set_state(self, *, T=None, P=None, X=None) -> None:
+        """
+        Reset the fluid state using exactly two of T, P, X.
+        The third, non-input property is cleared.
+        """
+        count = sum(v is not None for v in [T, P, X])
+        if count != 2:
+            raise ValueError("Exactly two of T, P, or X must be provided.")
+
+        # Clear all state first
+        self._T = None
+        self._P = None
+        self._X = None
+
+        # Set new input values
+        self._set_inputs(T, P, X)
+        self._update_state()
+

@@ -87,7 +87,9 @@ class FlowNode:
     # -------- Adoption logic --------
 
     def set_from_fluid(self, fluid: Fluid) -> None:
-        self.fluid = fluid  # will push to all ports
+        if self._fluid is fluid:
+            return  # ✅ Prevent redundant broadcast
+        self.fluid = fluid
 
     def adopt_from_port(self, port: FlowPort) -> None:
         if not port.fluid:

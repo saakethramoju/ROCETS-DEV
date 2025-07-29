@@ -24,6 +24,8 @@ class FlowPort(ABC):
 
     @fluid.setter
     def fluid(self, f: Fluid) -> None:
+        if self._fluid is f:
+            return  # ✅ Prevent recursion loop
         self._fluid = f
         if self._node:
             self._node.set_from_fluid(f)
@@ -120,23 +122,18 @@ class InFlow(FlowPort):
             raise TypeError("InFlow can only connect to an OutFlow.")
         self._ensure_free(self, other)
 
-        # OutFlow's fluid dominates if both exist
+        # Let the node be created with None if both ports are fluidless
         shared_fluid = other.fluid or self.fluid
-        if shared_fluid is None:
-            raise ValueError("At least one port must have a fluid to initiate connection.")
-
-        # Build shared node with resolved fluid
         node = FlowNode(shared_fluid)
 
-        # Set up shared connections
         self._node = other._node = node
         self._connected_port = other
         other._connected_port = self
 
-        # Share fluid across both ports
-        self.fluid = shared_fluid
+        self.fluid = shared_fluid  # may be None
         other.fluid = shared_fluid
         node.register_ports(self, other)
+
 
 
 class OutFlow(FlowPort):
@@ -145,20 +142,13 @@ class OutFlow(FlowPort):
             raise TypeError("OutFlow can only connect to an InFlow.")
         self._ensure_free(self, other)
 
-        # OutFlow's fluid dominates if both exist
         shared_fluid = self.fluid or other.fluid
-        if shared_fluid is None:
-            raise ValueError("At least one port must have a fluid to initiate connection.")
-
-        # Build shared node with resolved fluid
         node = FlowNode(shared_fluid)
 
-        # Set up shared connections
         self._node = other._node = node
         self._connected_port = other
         other._connected_port = self
 
-        # Share fluid across both ports
         self.fluid = shared_fluid
         other.fluid = shared_fluid
         node.register_ports(self, other)

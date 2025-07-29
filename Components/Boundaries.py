@@ -1,4 +1,3 @@
-
 from .Component import Component
 
 
@@ -15,7 +14,7 @@ class Inlet(Component):
             f"[Inlet: {self.name}]\n"
             f"  Port: {p.name}\n"
             f"  Connected To: {p.connected_port.name if p.connected_port else '-'}\n"
-            f"  Fluid: {p.fluid.name if p.fluid else '-'}\n"
+            f"  Fluid: {p.fluid_name if p.fluid else '-'}\n"
             f"  T [K]: {p.T if p.T is not None else '-'}\n"
             f"  P [Pa]: {p.P if p.P is not None else '-'}\n"
             f"  X: {p.X if p.X is not None else '-'}\n"
@@ -29,14 +28,14 @@ class Outlet(Component):
     def __init__(self, name: str, port_name: str):
         super().__init__(name)
         self.inflow = self.add_inflow(port_name)
-        
+
     def __str__(self):
-        p = self.outflow
+        p = self.inflow  # ✅ fixed (was incorrectly using self.outflow)
         return (
-            f"[Inlet: {self.name}]\n"
+            f"[Outlet: {self.name}]\n"
             f"  Port: {p.name}\n"
             f"  Connected To: {p.connected_port.name if p.connected_port else '-'}\n"
-            f"  Fluid: {p.fluid.name if p.fluid else '-'}\n"
+            f"  Fluid: {p.fluid_name if p.fluid else '-'}\n"
             f"  T [K]: {p.T if p.T is not None else '-'}\n"
             f"  P [Pa]: {p.P if p.P is not None else '-'}\n"
             f"  X: {p.X if p.X is not None else '-'}\n"
@@ -64,4 +63,3 @@ class FluidStateOutlet(Outlet):
 class MassFlowOutlet(Outlet):
     """Outlet with fixed mass flow draw rate."""
     pass
-
