@@ -1,5 +1,7 @@
+from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any, Optional, List
+
 
 
 class PropertyPort(ABC):
@@ -23,7 +25,7 @@ class PropertyPort(ABC):
 class PropertyIn(PropertyPort):
     def __init__(self, name: str, parent: Optional[object] = None) -> None:
         super().__init__(name, parent)
-        self._connected_out: Optional["PropertyOut"] = None
+        self._connected_out: Optional[PropertyOut] = None
 
     @property
     def value(self) -> Any:

@@ -18,6 +18,7 @@ class Mixture(Fluid):
         self.name = "&".join(f"{comp}[{self._fractions[comp]}]" for comp in self._constituents)
 
         super().__init__(self.name, T=T, P=P, X=X)
+        self._update_state()
 
     # --- Mixture-Specific Properties ---
 
@@ -142,39 +143,31 @@ class Mixture(Fluid):
 
         return "\n".join(summary)
 
-
-    def set_mole_fractions(self, new_fractions: dict[str, float]):
-        total = sum(new_fractions.values())
+    def _set_fractions(self, fractions: Dict[str, float], mode: str):
+        if mode not in ("mole", "mass"):
+            raise ValueError("Mode must be 'mole' or 'mass'.")
+        total = sum(fractions.values())
         if total <= 0:
-            raise ValueError("Mole fractions must sum to a positive number.")
-        
-        normalized = {k: v / total for k, v in new_fractions.items()}
+            raise ValueError(f"{mode.capitalize()} fractions must sum to a positive number.")
+
+        normalized = {k: v / total for k, v in fractions.items()}
         self._fractions = normalized
-        self._fraction_type = "mole"
-        self._constituents = list(normalized.keys())
-        self.name = "&".join(f"{comp}[{normalized[comp]}]" for comp in self._constituents)
-
-        self._update_state()
-
-    def set_mass_fractions(self, new_fractions: dict[str, float]):
-        total = sum(new_fractions.values())
-        if total <= 0:
-            raise ValueError("Mass fractions must sum to a positive number.")
-
-        normalized = {k: v / total for k, v in new_fractions.items()}
-        self._fractions = normalized
-        self._fraction_type = "mass"
+        self._fraction_type = mode
         self._constituents = list(normalized.keys())
 
-        # 🔁 Convert to mole fractions for CoolProp string
-        molar_masses = {c: PropsSI("M", c) for c in normalized}
-        moles = {c: normalized[c] / molar_masses[c] for c in normalized}
-        total_moles = sum(moles.values())
-        mole_fracs = {c: moles[c] / total_moles for c in normalized}
+        if mode == "mass":
+            molar_masses = {c: PropsSI("M", c) for c in normalized}
+            moles = {c: normalized[c] / molar_masses[c] for c in normalized}
+            total_moles = sum(moles.values())
+            mole_fracs = {c: moles[c] / total_moles for c in normalized}
+        else:
+            mole_fracs = normalized
 
-        self.name = "&".join(f"{comp}[{mole_fracs[comp]}]" for comp in normalized)
-
+        self.name = "&".join(f"{comp}[{mole_fracs[comp]}]" for comp in mole_fracs)
         self._update_state()
+
+    def set_mole_fractions(self, new_fractions): self._set_fractions(new_fractions, "mole")
+    def set_mass_fractions(self, new_fractions): self._set_fractions(new_fractions, "mass")
 
 
     @mole_fractions.setter

@@ -53,7 +53,7 @@ class Component:
             all_keys = {}
             for d in port_dicts:
                 all_keys.update(d)
-            match = difflib.get_close_matches(name.lower(), all_keys.keys(), n=1, cutoff=0.6)
+            match = difflib.get_close_matches(name.lower(), all_keys.keys(), n=1, cutoff=0.8)
             return all_keys.get(match[0]) if match else None
 
         my_port = fuzzy_lookup(
@@ -66,7 +66,11 @@ class Component:
         )
 
         if not my_port or not their_port:
-            raise ValueError(f"Could not find ports '{my_port_name}' or '{other_port_name}'")
+            raise ValueError(
+                f"Could not find ports '{my_port_name}' or '{other_port_name}'.\n"
+                f"Available ports in self: {list(self.ports())}\n"
+                f"Available ports in other: {list(other.ports())}"
+            )
 
         my_port.connect(their_port)
 
@@ -204,7 +208,7 @@ class Component:
             + list(self.property_ins.keys())
             + list(self.property_outs.keys())
         )
-        matches = difflib.get_close_matches(key, all_keys, n=1, cutoff=0.6)
+        matches = difflib.get_close_matches(key, all_keys, n=1, cutoff=0.8)
         return matches[0] if matches else None
 
     def __getitem__(self, key: str):
@@ -229,7 +233,7 @@ class Component:
             raise KeyError(f"No port similar to '{key}' on component '{self.name}'")
 
         if match in self.property_ins:
-            self.property_ins[match].value = value
+            raise AttributeError("Cannot assign value to PropertyIn; must connect it to a PropertyOut.")
         elif match in self.property_outs:
             self.property_outs[match].value = value
         else:
@@ -243,7 +247,11 @@ class Component:
         yield from self.inflows.keys()
         yield from self.outflows.keys()
 
-    def ports(self) -> Dict[str, FlowPort]:
-        """Convenience: one dict view of all ports."""
-        return {**self.outflows, **self.inflows}
+    def ports(self, include_properties=False) -> Dict[str, FlowPort]:
+        """True if you want to include property ports"""
+        base = {**self.outflows, **self.inflows}
+        if include_properties:
+            base.update(self.property_ins)
+            base.update(self.property_outs)
+        return base
 

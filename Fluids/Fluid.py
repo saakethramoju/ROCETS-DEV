@@ -18,7 +18,7 @@ class Fluid:
     def __init__(self, name: str = 'Water', *, T=None, P=None, X=None):
         self.name = name
         self._set_inputs(T, P, X)
-        self._update_state()
+        #self._update_state()
 
     @property
     def is_mixture(self) -> bool:

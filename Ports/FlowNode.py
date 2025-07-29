@@ -31,7 +31,7 @@ class FlowNode:
 
     # -------- Register ports --------
 
-    def register_ports(self, *ports: Iterable[FlowPort]) -> None:
+    def register_ports(self, *ports: FlowPort) -> None:
         for p in ports:
             if p not in self._ports:
                 self._ports.append(p)
@@ -141,6 +141,8 @@ class FlowNode:
     def mole_fractions(self, new_fractions: dict[str, float]) -> None:
         if isinstance(self._fluid, Mixture):
             self._fluid.set_mole_fractions(new_fractions)
+            for p in self._ports:
+                p.fluid = self._fluid  # ✅ re-sync
         else:
             raise AttributeError("Cannot set mole fractions on non-mixture fluid.")
 
@@ -154,5 +156,7 @@ class FlowNode:
     def mass_fractions(self, new_fractions: dict[str, float]) -> None:
         if isinstance(self._fluid, Mixture):
             self._fluid.set_mass_fractions(new_fractions)
+            for p in self._ports:
+                p.fluid = self._fluid  # ✅ re-sync
         else:
             raise AttributeError("Cannot set mass fractions on non-mixture fluid.")

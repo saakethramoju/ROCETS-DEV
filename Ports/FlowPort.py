@@ -32,7 +32,8 @@ class FlowPort(ABC):
 
     @property
     def fluid_name(self) -> Optional[str]:
-        return self._fluid.name if self._fluid else None
+        return getattr(self._fluid, "name", None)
+
 
     @property
     def T(self) -> Optional[float]:
@@ -141,8 +142,17 @@ class FlowPort(ABC):
     def mass_fractions(self, new_fractions: dict[str, float]) -> None:
         if isinstance(self._fluid, Mixture):
             self._fluid.set_mass_fractions(new_fractions)
+            self.fluid = self._fluid  # ✅ Force sync and notify node
         else:
             raise AttributeError("Cannot set mass fractions on non-mixture fluid.")
+        
+            
+    def set_state(self, *, T=None, P=None, X=None):
+        if not self._fluid:
+            raise AttributeError("No fluid to set state on.")
+        self._fluid.set_state(T=T, P=P, X=X)
+
+
 
     
 class InFlow(FlowPort):
