@@ -42,5 +42,13 @@ beep = c.add_property_in("Mixing Efficiency")
 
 a.connect_all(b, print_summary=True)
 
+a["inlet"].P = 101325
+a["inlet"].T = 300
+print(a["inlet"])
+print(a["inlet"].fluid)
+a["inlet"].fluid = Fluid("Methane", P=3e6, X=0.7)
+print(a["inlet"].P, a["inlet"].T)
+print(a["inlet"].fluid)
+
 
 
