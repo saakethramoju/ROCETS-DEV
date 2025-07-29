@@ -1,160 +1,202 @@
 from CoolProp.CoolProp import PropsSI
-from CoolProp import CoolProp
+import CoolProp
 
 
 class Fluid:
-    def __init__(self, name: str, *, T=None, P=None, X=None):
-        """
-        Create a fluid state for a supported pure substance using any two of:
-        - T: temperature [K]
-        - P: pressure [Pa]
-        - X: vapor quality [0–1] (only for two-phase fluids)
-        """
-        self.name = name # Read only
-        self._state = {} # Reado only
-        self._build_state(name, T, P, X)
+    _phase_name_map = {
+        CoolProp.iphase_liquid: "Liquid",
+        CoolProp.iphase_gas: "Gas",
+        CoolProp.iphase_twophase: "Two-Phase",
+        CoolProp.iphase_supercritical: "Supercritical",
+        CoolProp.iphase_supercritical_gas: "Supercritical Gas",
+        CoolProp.iphase_supercritical_liquid: "Supercritical Liquid",
+        CoolProp.iphase_critical_point: "Critical Point",
+        CoolProp.iphase_unknown: "Unknown",
+        CoolProp.iphase_not_imposed: "Not Imposed"
+    }
 
-    def _build_state(self, name, T, P, X):
-        if sum(x is not None for x in [T, P, X]) != 2:
-            raise ValueError("You must provide exactly two of: T, P, X")
+    def __init__(self, name: str = 'Water', *, T=None, P=None, X=None):
+        self.name = name
+        self._set_inputs(T, P, X)
+        self._update_state()
 
+    def _set_inputs(self, T, P, X):
+        if (T is not None) + (P is not None) + (X is not None) != 2:
+            raise ValueError("Exactly two of T, P, X must be provided.")
+
+        if T is not None: self._T = T
+        if P is not None: self._P = P
+        if X is not None: self._X = X
+
+        if T is not None and P is not None:
+            self._input_pair = ("T", "P")
+        elif T is not None and X is not None:
+            self._input_pair = ("T", "Q")
+        elif P is not None and X is not None:
+            self._input_pair = ("P", "Q")
+
+    def _update_state(self):
+        if self._input_pair == ("T", "P"):
+            self._state = {"T": self._T, "P": self._P}
+        elif self._input_pair == ("T", "Q"):
+            self._P = PropsSI("P", "T", self._T, "Q", self._X, self.name)
+            self._state = {"T": self._T, "Q": self._X}
+        elif self._input_pair == ("P", "Q"):
+            self._T = PropsSI("T", "P", self._P, "Q", self._X, self.name)
+            self._state = {"P": self._P, "Q": self._X}
+
+    def _check_input_key(self, key):
+        if key not in self._input_pair:
+            raise AttributeError(f"Cannot set '{key}'. Only {self._input_pair} are allowed.")
+
+    def _prop(self, key):
+        input_map = {"T": "_T", "P": "_P", "Q": "_X"}
+        k1, k2 = self._input_pair
+        v1 = getattr(self, input_map[k1])
+        v2 = getattr(self, input_map[k2])
         try:
-            if T is not None and P is not None:
-                self._state["T"] = T
-                self._state["P"] = P
-            elif P is not None and X is not None:
-                self._state["P"] = P
-                self._state["T"] = PropsSI("T", "P", P, "Q", X, name)
-            elif T is not None and X is not None:
-                self._state["T"] = T
-                self._state["P"] = PropsSI("P", "T", T, "Q", X, name)
+            return PropsSI(key, k1, v1, k2, v2, self.name)
+        except Exception:
+            return float("nan")
+
+    # --- Input Properties ---
+    @property
+    def T(self): return getattr(self, "_T", None)
+    @T.setter
+    def T(self, value):
+        self._check_input_key("T")
+        self._T = value
+        self._update_state()
+
+    @property
+    def P(self): return getattr(self, "_P", None)
+    @P.setter
+    def P(self, value):
+        self._check_input_key("P")
+        self._P = value
+        self._update_state()
+
+    @property
+    def X(self): return getattr(self, "_X", None)
+    @X.setter
+    def X(self, value):
+        self._check_input_key("Q")
+        self._X = value
+        self._update_state()
+
+    # --- Thermodynamic Properties ---
+    @property
+    def density(self): return self._prop("D")
+
+    @property
+    def enthalpy(self): return self._prop("H")
+
+    @property
+    def viscosity(self): return self._prop("V")
+
+    @property
+    def cp(self): return self._prop("C")
+
+    @property
+    def thermal_conductivity(self): return self._prop("L")
+
+    @property
+    def prandtl(self): return self._prop("PRANDTL")
+
+    @property
+    def speed_of_sound(self): return self._prop("A")
+
+    @property
+    def phase(self):
+        input_map = {"T": "_T", "P": "_P", "Q": "_X"}
+        k1, k2 = self._input_pair
+        v1 = getattr(self, input_map[k1])
+        v2 = getattr(self, input_map[k2])
+        try:
+            # CoolProp returns float (e.g., 6.0), cast to int for mapping
+            phase_int = int(PropsSI("Phase", k1, v1, k2, v2, self.name))
+            return self._phase_name_map.get(phase_int, f"Unknown ({phase_int})")
         except Exception as e:
-            raise ValueError(f"Failed to initialize fluid '{name}' with given inputs: {e}")
+            return "Unknown"
+
 
     @property
-    def temperature(self):
-        return self._state.get("T")
+    def molecular_weight(self): return PropsSI("M", "", 0, "", 0, self.name)
+
+    # --- Saturation and Critical Properties ---
+    @property
+    def saturation_pressure(self): return PropsSI("P", "T", self._T, "Q", 0, self.name)
 
     @property
-    def pressure(self):
-        return self._state.get("P")
+    def saturation_temperature(self): return PropsSI("T", "P", self._P, "Q", 0, self.name)
 
     @property
-    def quality(self):
-        try:
-            x = PropsSI("Q", "T", self.temperature, "P", self.pressure, self.name)
-            if 0.0 <= x <= 1.0:
-                return x
-        except Exception:
-            pass
-        return None
+    def critical_temperature(self): return PropsSI("TCRIT", "", 0, "", 0, self.name)
 
     @property
-    def phase(self) -> str:
-        try:
-            code = int(PropsSI("Phase", "T", self.temperature, "P", self.pressure, self.name))
-        except Exception:
-            return "unknown"
-        phase_map = {
-            CoolProp.iphase_liquid: "liquid",
-            CoolProp.iphase_supercritical: "supercritical",
-            CoolProp.iphase_supercritical_gas: "supercritical gas",
-            CoolProp.iphase_supercritical_liquid: "supercritical liquid",
-            CoolProp.iphase_critical_point: "critical point",
-            CoolProp.iphase_gas: "gas",
-            CoolProp.iphase_twophase: "two-phase",
-            CoolProp.iphase_unknown: "unknown",
-            CoolProp.iphase_not_imposed: "not imposed"
-        }
-        return phase_map.get(code, f"unrecognized({code})")
+    def critical_pressure(self): return PropsSI("PCRIT", "", 0, "", 0, self.name)
 
     @property
-    def density(self):
-        return PropsSI("D", "T", self.temperature, "P", self.pressure, self.name)
+    def min_temperature(self): return PropsSI("TMIN", "", 0, "", 0, self.name)
 
     @property
-    def enthalpy(self):
-        return PropsSI("H", "T", self.temperature, "P", self.pressure, self.name)
+    def max_temperature(self): return PropsSI("TMAX", "", 0, "", 0, self.name)
 
     @property
-    def viscosity(self):
-        return PropsSI("V", "T", self.temperature, "P", self.pressure, self.name)
+    def min_pressure(self): return PropsSI("PMIN", "", 0, "", 0, self.name)
 
     @property
-    def cp(self):
-        return PropsSI("C", "T", self.temperature, "P", self.pressure, self.name)
-
-    @property
-    def saturation_pressure(self):
-        return PropsSI("P", "T", self.temperature, "Q", 0, self.name)
-
-    @property
-    def saturation_temperature(self):
-        return PropsSI("T", "P", self.pressure, "Q", 0, self.name)
-
-    @property
-    def critical_temperature(self):
-        return PropsSI("TCRIT", self.name)
-
-    @property
-    def critical_pressure(self):
-        return PropsSI("PCRIT", self.name)
-    
-
-    @property
-    def min_temperature(self):
-        """Minimum temperature CoolProp supports for this fluid."""
-        return PropsSI("Tmin", self.name)
-
-    @property
-    def max_temperature(self):
-        """Maximum temperature CoolProp supports for this fluid."""
-        return PropsSI("Tmax", self.name)
-
-    @property
-    def min_pressure(self):
-        """Minimum pressure CoolProp supports for this fluid."""
-        return PropsSI("Pmin", self.name)
-
-    @property
-    def max_pressure(self):
-        """Maximum pressure CoolProp supports for this fluid."""
-        return PropsSI("Pmax", self.name)
-
-    def summary(self) -> dict:
-        def safe(fn):
-            try:
-                return fn()
-            except:
-                return "N/A"
-
-        return {
-            "Fluid": self.name,
-            "Temperature (K)": self.temperature,
-            "Pressure (Pa)": self.pressure,
-            "Vapor Quality": self.quality,
-            "Phase": self.phase,
-            "Density (kg/m³)": safe(lambda: self.density),
-            "Enthalpy (J/kg)": safe(lambda: self.enthalpy),
-            "Viscosity (Pa·s)": safe(lambda: self.viscosity),
-            "Cp (J/kg·K)": safe(lambda: self.cp),
-            "Saturation Pressure (Pa)": safe(lambda: self.saturation_pressure),
-            "Saturation Temperature (K)": safe(lambda: self.saturation_temperature),
-            "Critical Temperature (K)": safe(lambda: self.critical_temperature),
-            "Critical Pressure (Pa)": safe(lambda: self.critical_pressure),
-        }
-
-    def __str__(self):
-        return "\n".join(f"{k}: {v}" for k, v in self.summary().items())
+    def max_pressure(self): return PropsSI("PMAX", "", 0, "", 0, self.name)
 
     def __repr__(self):
-        return f"<Fluid {self.name} | T={self.temperature} K, P={self.pressure} Pa, X={self.quality}>"
-        
-    def is_defined(self) -> bool:
-        """
-        Return True if the fluid state is valid (i.e., created from exactly two of T, P, X).
-        """
-        return (
-            self.name is not None and
-            sum(v is not None for v in [self.temperature, self.pressure, self.quality]) >= 2
-        )
+        state_desc = ', '.join(f"{k}={getattr(self, '_'+k)}" for k in self._input_pair)
+        return f"<Fluid({self.name}): {state_desc}>"
+
+    def __str__(self):
+        input_map = {"T": "_T", "P": "_P", "Q": "_X"}
+
+        def get_input_value(k):
+            return getattr(self, input_map[k])
+
+        def fmt(val, unit="", precision=4):
+            if val is None or val != val:
+                return None
+            if isinstance(val, (float, int)):
+                return f"{val:.{precision}f} {unit}".rstrip()
+            return f"{val} {unit}".rstrip()
+
+        summary = [
+            f"Fluid: {self.name}",
+            f"Defined by: {self._input_pair[0]} = {fmt(get_input_value(self._input_pair[0]))}, "
+            f"{self._input_pair[1]} = {fmt(get_input_value(self._input_pair[1]))}",
+            "",
+            "--- Thermodynamic State ---"
+        ]
+
+        def add_line(label, value, unit="", precision=4):
+            v = fmt(value, unit, precision)
+            if v is not None:
+                summary.append(f"{label:<30} {v}")
+
+        add_line("Phase:", self.phase)
+        add_line("Temperature [K]:", self.T)
+        add_line("Pressure [Pa]:", self.P)
+        add_line("Quality:", self.X)
+        add_line("Density [kg/m³]:", self.density)
+        add_line("Enthalpy [J/kg]:", self.enthalpy)
+        add_line("Specific Heat [J/kg·K]:", self.cp)
+        add_line("Viscosity [Pa·s]:", self.viscosity, precision=6)
+        add_line("Thermal Conductivity [W/m·K]:", self.thermal_conductivity, precision=6)
+        add_line("Speed of Sound [m/s]:", self.speed_of_sound)
+        add_line("Prandtl Number:", self.prandtl)
+
+        summary += ["", "--- Fluid Constants ---"]
+        add_line("Molecular Weight [kg/mol]:", self.molecular_weight, precision=6)
+        add_line("Critical Temperature [K]:", self.critical_temperature)
+        add_line("Critical Pressure [Pa]:", self.critical_pressure)
+        add_line("Min Temperature [K]:", self.min_temperature, precision=2)
+        add_line("Max Temperature [K]:", self.max_temperature, precision=2)
+        add_line("Min Pressure [Pa]:", self.min_pressure, precision=2)
+        add_line("Max Pressure [Pa]:", self.max_pressure, precision=2)
+
+        return "\n".join(summary)
