@@ -83,7 +83,6 @@ class Mixture(Fluid):
     @property
     def max_pressure(self): return self._safe_prop("PMAX")
 
-    # Inject constituent info into string output
     def __str__(self):
         input_map = {"T": "_T", "P": "_P", "Q": "_X"}
 
@@ -98,16 +97,20 @@ class Mixture(Fluid):
             return f"{val} {unit}".rstrip()
 
         summary = [
-            f"Mixture: {self.name}",
+            f"Mixture: " + "&".join(f"{comp}[{self.mole_fractions[comp]:.4f}]" for comp in self.constituents),
             f"Defined by: {self._input_pair[0]} = {fmt(get_input_value(self._input_pair[0]))}, "
             f"{self._input_pair[1]} = {fmt(get_input_value(self._input_pair[1]))}",
             "",
-            "--- Constituents ---"
+            "--- Mole Fractions ---"
         ]
 
-        fracs = self.mole_fractions if self._fraction_type == "mole" else self.mass_fractions
         for comp in self.constituents:
-            summary.append(f"{comp:<30} {fracs[comp]:.4f}")
+            summary.append(f"{comp:<30} {self.mole_fractions[comp]:.4f}")
+
+        summary.append("")
+        summary.append("--- Mass Fractions ---")
+        for comp in self.constituents:
+            summary.append(f"{comp:<30} {self.mass_fractions[comp]:.4f}")
 
         summary += ["", "--- Thermodynamic State ---"]
 
@@ -138,3 +141,46 @@ class Mixture(Fluid):
         add_line("Max Pressure [Pa]:", self.max_pressure, precision=2)
 
         return "\n".join(summary)
+
+
+    def set_mole_fractions(self, new_fractions: dict[str, float]):
+        total = sum(new_fractions.values())
+        if total <= 0:
+            raise ValueError("Mole fractions must sum to a positive number.")
+        
+        normalized = {k: v / total for k, v in new_fractions.items()}
+        self._fractions = normalized
+        self._fraction_type = "mole"
+        self._constituents = list(normalized.keys())
+        self.name = "&".join(f"{comp}[{normalized[comp]}]" for comp in self._constituents)
+
+        self._update_state()
+
+    def set_mass_fractions(self, new_fractions: dict[str, float]):
+        total = sum(new_fractions.values())
+        if total <= 0:
+            raise ValueError("Mass fractions must sum to a positive number.")
+
+        normalized = {k: v / total for k, v in new_fractions.items()}
+        self._fractions = normalized
+        self._fraction_type = "mass"
+        self._constituents = list(normalized.keys())
+
+        # 🔁 Convert to mole fractions for CoolProp string
+        molar_masses = {c: PropsSI("M", c) for c in normalized}
+        moles = {c: normalized[c] / molar_masses[c] for c in normalized}
+        total_moles = sum(moles.values())
+        mole_fracs = {c: moles[c] / total_moles for c in normalized}
+
+        self.name = "&".join(f"{comp}[{mole_fracs[comp]}]" for comp in normalized)
+
+        self._update_state()
+
+
+    @mole_fractions.setter
+    def mole_fractions(self, value: Dict[str, float]):
+        self.set_mole_fractions(value)
+
+    @mass_fractions.setter
+    def mass_fractions(self, value: Dict[str, float]):
+        self.set_mass_fractions(value)

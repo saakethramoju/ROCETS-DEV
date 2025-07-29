@@ -1,6 +1,6 @@
 from __future__ import annotations
 from typing import Optional, Iterable, List, TYPE_CHECKING
-from Fluids import Fluid
+from Fluids import Fluid, Mixture
 
 if TYPE_CHECKING:
     from .FlowPort import FlowPort
@@ -87,9 +87,10 @@ class FlowNode:
     # -------- Adoption logic --------
 
     def set_from_fluid(self, fluid: Fluid) -> None:
-        if self._fluid is fluid:
-            return  # ✅ Prevent redundant broadcast
+        if self._fluid and self._fluid.name == fluid.name:
+            return  # same effective fluid
         self.fluid = fluid
+
 
     def adopt_from_port(self, port: FlowPort) -> None:
         if not port.fluid:
@@ -129,3 +130,29 @@ class FlowNode:
             f"  P         = {self.P} Pa\n"
             f"  X         = {self.X}"
         )
+    
+    @property
+    def mole_fractions(self) -> dict[str, float]:
+        if isinstance(self._fluid, Mixture):
+            return self._fluid.mole_fractions
+        raise AttributeError("Mole fractions only exist for mixture fluids.")
+
+    @mole_fractions.setter
+    def mole_fractions(self, new_fractions: dict[str, float]) -> None:
+        if isinstance(self._fluid, Mixture):
+            self._fluid.set_mole_fractions(new_fractions)
+        else:
+            raise AttributeError("Cannot set mole fractions on non-mixture fluid.")
+
+    @property
+    def mass_fractions(self) -> dict[str, float]:
+        if isinstance(self._fluid, Mixture):
+            return self._fluid.mass_fractions
+        raise AttributeError("Mass fractions only exist for mixture fluids.")
+
+    @mass_fractions.setter
+    def mass_fractions(self, new_fractions: dict[str, float]) -> None:
+        if isinstance(self._fluid, Mixture):
+            self._fluid.set_mass_fractions(new_fractions)
+        else:
+            raise AttributeError("Cannot set mass fractions on non-mixture fluid.")

@@ -3,7 +3,7 @@ from abc import ABC, abstractmethod
 from typing import Optional, TYPE_CHECKING
 
 from .FlowNode import FlowNode
-from Fluids import Fluid
+from Fluids import Fluid, Mixture
 
 if TYPE_CHECKING:
     from Components.Component import Component
@@ -115,6 +115,35 @@ class FlowPort(ABC):
             f"  Connected to = {self._connected_port.name if self._connected_port else 'None'}\n"
             f"  Node         = {self._node.name if self._node else 'None'}"
         )
+        
+    @property
+    def mole_fractions(self) -> dict[str, float]:
+        if isinstance(self._fluid, Mixture):
+            return self._fluid.mole_fractions
+        raise AttributeError("Mole fractions only exist for mixture fluids.")
+
+    @mole_fractions.setter
+    def mole_fractions(self, new_fractions: dict[str, float]) -> None:
+        if isinstance(self._fluid, Mixture):
+            self._fluid.set_mole_fractions(new_fractions)
+            self.fluid = self._fluid  # ✅ Force sync
+        else:
+            raise AttributeError("Cannot set mole fractions on non-mixture fluid.")
+
+
+    @property
+    def mass_fractions(self) -> dict[str, float]:
+        if isinstance(self._fluid, Mixture):
+            return self._fluid.mass_fractions
+        raise AttributeError("Mass fractions only exist for mixture fluids.")
+
+    @mass_fractions.setter
+    def mass_fractions(self, new_fractions: dict[str, float]) -> None:
+        if isinstance(self._fluid, Mixture):
+            self._fluid.set_mass_fractions(new_fractions)
+        else:
+            raise AttributeError("Cannot set mass fractions on non-mixture fluid.")
+
     
 class InFlow(FlowPort):
     def connect(self, other: FlowPort) -> None:
