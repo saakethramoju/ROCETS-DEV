@@ -67,7 +67,9 @@ mix = Mixture({"Methane": 0.6, "Ethane": 0.4}, fraction_type="mole", T=300, P=10
 inlet = Component("Inlet")
 inlet.add_outflow("Source")
 outlet = FluidStateOutlet("Outlet", "Source")
-inlet.connect(outlet, print_summary=True)
+#inlet.connect(outlet, print_summary=True)
+#inlet.connect_ports("source", outlet, "source")
+inlet.connect_all(outlet, print_summary=True)
 
 inlet["source"].fluid = mix
 print(inlet["source"])
@@ -121,3 +123,4 @@ print(inlet["source"].mole_fractions)
 print(inlet["source"].node.mass_fractions)
 
 print(inlet["source"].fluid)'''
+

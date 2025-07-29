@@ -53,26 +53,40 @@ class Component:
             all_keys = {}
             for d in port_dicts:
                 all_keys.update(d)
-            match = difflib.get_close_matches(name.lower(), all_keys.keys(), n=1, cutoff=0.8)
+            match = difflib.get_close_matches(name.lower(), all_keys.keys(), n=1, cutoff=0.6)
             return all_keys.get(match[0]) if match else None
 
         my_port = fuzzy_lookup(
-            my_port_name,
-            [self.inflows, self.outflows, self.property_ins, self.property_outs],
+            my_port_name, [self.inflows, self.outflows, self.property_ins, self.property_outs]
         )
         their_port = fuzzy_lookup(
-            other_port_name,
-            [other.inflows, other.outflows, other.property_ins, other.property_outs],
+            other_port_name, [other.inflows, other.outflows, other.property_ins, other.property_outs]
         )
 
         if not my_port or not their_port:
             raise ValueError(
                 f"Could not find ports '{my_port_name}' or '{other_port_name}'.\n"
-                f"Available ports in self: {list(self.ports())}\n"
-                f"Available ports in other: {list(other.ports())}"
+                f"Available ports in self: {list(self.ports(include_properties=True).keys())}\n"
+                f"Available ports in other: {list(other.ports(include_properties=True).keys())}"
             )
 
-        my_port.connect(their_port)
+        # FlowPort: only Out → In
+        if isinstance(my_port, OutFlow) and isinstance(their_port, InFlow):
+            if not my_port.is_connected() and not their_port.is_connected():
+                my_port.connect(their_port)
+        elif isinstance(my_port, InFlow) and isinstance(their_port, OutFlow):
+            if not my_port.is_connected() and not their_port.is_connected():
+                their_port.connect(my_port)
+        # PropertyPort: only Out → In
+        elif isinstance(my_port, PropertyOut) and isinstance(their_port, PropertyIn):
+            if not their_port.is_connected():
+                my_port.connect(their_port)
+        elif isinstance(my_port, PropertyIn) and isinstance(their_port, PropertyOut):
+            if not my_port.is_connected():
+                their_port.connect(my_port)
+        else:
+            raise TypeError(f"Incompatible port types: {type(my_port).__name__} ↔ {type(their_port).__name__}")
+
 
 
 
@@ -116,87 +130,69 @@ class Component:
     def __repr__(self) -> str:
         return f"<Component {self.name}>"
 
+
+
     def connect(self, other: "Component", print_summary: bool = False) -> None:
-        """
-        Automatically connects matching ports between two components by exact name.
-        Only connects unconnected ports:
-        - self.outflows → other.inflows
-        - other.outflows → self.inflows
-        """
         connections = []
 
-        # Connect: self.outflows → other.inflows
+        # OutFlow (self) → InFlow (other)
         for name, my_port in self.outflows.items():
-            if my_port.is_connected():
-                continue
             if name in other.inflows:
-                other_port = other.inflows[name]
-                if not other_port.is_connected():
-                    my_port.connect(other_port)
+                their_port = other.inflows[name]
+                if not my_port.is_connected() and not their_port.is_connected():
+                    my_port.connect(their_port)
                     connections.append((f"{self.name}.{name}", f"{other.name}.{name}"))
 
-        # Connect: other.outflows → self.inflows
+        # OutFlow (other) → InFlow (self)
         for name, their_port in other.outflows.items():
-            if their_port.is_connected():
-                continue
             if name in self.inflows:
                 my_port = self.inflows[name]
-                if not my_port.is_connected():
+                if not my_port.is_connected() and not their_port.is_connected():
                     their_port.connect(my_port)
                     connections.append((f"{other.name}.{name}", f"{self.name}.{name}"))
 
-        # Optional summary
         if print_summary and connections:
             print(f"[{self.name}] connected to [{other.name}]:")
             for src, dst in connections:
                 print(f"  {src} → {dst}")
 
+
+
     def connect_all(self, other: "Component", print_summary: bool = False) -> None:
         self.connect(other, print_summary=print_summary)
 
         def norm(s): return s.lower()
-
-        # Track what got connected
         summary = []
 
-        # --- PropertyOut → PropertyIn ---
+        # PropertyOut (self) → PropertyIn (other)
         for my_name, my_out in self.property_outs.items():
-            if not isinstance(my_out, PropertyOut):
-                continue
             for their_name, their_in in other.property_ins.items():
-                if not isinstance(their_in, PropertyIn):
-                    continue
-                if their_in.is_connected():
-                    continue
-                if norm(my_name) == norm(their_name) or norm(my_name) in norm(their_name) or norm(their_name) in norm(my_name):
-                    try:
-                        my_out.connect(their_in)
-                        summary.append((f"{self.name}.{my_name}", f"{other.name}.{their_name}"))
-                        break
-                    except Exception:
-                        continue
+                if not their_in.is_connected():
+                    if norm(my_name) == norm(their_name) or norm(my_name) in norm(their_name) or norm(their_name) in norm(my_name):
+                        try:
+                            my_out.connect(their_in)
+                            summary.append((f"{self.name}.{my_name}", f"{other.name}.{their_name}"))
+                            break
+                        except Exception:
+                            continue
 
-        # --- PropertyOut (other) → PropertyIn (self) ---
+        # PropertyOut (other) → PropertyIn (self)
         for their_name, their_out in other.property_outs.items():
-            if not isinstance(their_out, PropertyOut):
-                continue
             for my_name, my_in in self.property_ins.items():
-                if not isinstance(my_in, PropertyIn):
-                    continue
-                if my_in.is_connected():
-                    continue
-                if norm(their_name) == norm(my_name) or norm(their_name) in norm(my_name) or norm(my_name) in norm(their_name):
-                    try:
-                        their_out.connect(my_in)
-                        summary.append((f"{other.name}.{their_name}", f"{self.name}.{my_name}"))
-                        break
-                    except Exception:
-                        continue
+                if not my_in.is_connected():
+                    if norm(their_name) == norm(my_name) or norm(their_name) in norm(my_name) or norm(my_name) in norm(their_name):
+                        try:
+                            their_out.connect(my_in)
+                            summary.append((f"{other.name}.{their_name}", f"{self.name}.{my_name}"))
+                            break
+                        except Exception:
+                            continue
 
         if print_summary and summary:
             print(f"[{self.name}] connected property ports with [{other.name}]:")
             for src, dst in summary:
                 print(f"  {src} → {dst}")
+
 
 
     # ---- dict-like access ----
