@@ -7,3 +7,5 @@ lox = get_prop("LOX")     # Liquid Oxygen
 rp1.set_std_state()
 
 rp1.summ_print()
+
+print(rp1.hvapL)

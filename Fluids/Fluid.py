@@ -1,8 +1,9 @@
 from CoolProp.CoolProp import PropsSI
 import CoolProp
+from .BaseFluid import BaseFluid
 
 
-class Fluid:
+class Fluid(BaseFluid):
     _phase_name_map = {
         CoolProp.iphase_liquid: "Liquid",
         CoolProp.iphase_gas: "Gas",
@@ -16,7 +17,7 @@ class Fluid:
     }
 
     def __init__(self, name: str = 'Water', *, T=None, P=None, X=None):
-        self.name = name
+        super().__init__(name)
         self._set_inputs(T, P, X)
         #self._update_state()
 

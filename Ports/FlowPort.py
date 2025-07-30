@@ -3,27 +3,27 @@ from abc import ABC, abstractmethod
 from typing import Optional, TYPE_CHECKING
 
 from .FlowNode import FlowNode
-from Fluids import Fluid, Mixture
+from Fluids import BaseFluid, Mixture
 
 if TYPE_CHECKING:
     from Components.Component import Component
 
 
 class FlowPort(ABC):
-    def __init__(self, name: str, fluid: Optional[Fluid] = None, parent: Optional["Component"] = None) -> None:
+    def __init__(self, name: str, fluid: Optional[BaseFluid] = None, parent: Optional["Component"] = None) -> None:
         self.name = name
         self.parent = parent
-        self._fluid: Optional[Fluid] = fluid
+        self._fluid: Optional[BaseFluid] = fluid
         self._node: Optional[FlowNode] = None
         self._connected_port: Optional["FlowPort"] = None
         self._m_dot: Optional[float] = None
 
     @property
-    def fluid(self) -> Optional[Fluid]:
+    def fluid(self) -> Optional[BaseFluid]:
         return self._fluid
 
     @fluid.setter
-    def fluid(self, f: Fluid) -> None:
+    def fluid(self, f: BaseFluid) -> None:
         if self._fluid is f:
             return  # ✅ Prevent recursion loop
         self._fluid = f
@@ -33,7 +33,6 @@ class FlowPort(ABC):
     @property
     def fluid_name(self) -> Optional[str]:
         return getattr(self._fluid, "name", None)
-
 
     @property
     def T(self) -> Optional[float]:
@@ -48,7 +47,7 @@ class FlowPort(ABC):
     @property
     def P(self) -> Optional[float]:
         return self._fluid.P if self._fluid else None
-    
+
     @P.setter
     def P(self, value: float) -> None:
         if not self._fluid:
@@ -58,7 +57,7 @@ class FlowPort(ABC):
     @property
     def X(self) -> Optional[float]:
         return self._fluid.X if self._fluid else None
-    
+
     @X.setter
     def X(self, value: float) -> None:
         if not self._fluid:
@@ -116,7 +115,7 @@ class FlowPort(ABC):
             f"  Connected to = {self._connected_port.name if self._connected_port else 'None'}\n"
             f"  Node         = {self._node.name if self._node else 'None'}"
         )
-        
+
     @property
     def mole_fractions(self) -> dict[str, float]:
         if isinstance(self._fluid, Mixture):
@@ -131,7 +130,6 @@ class FlowPort(ABC):
         else:
             raise AttributeError("Cannot set mole fractions on non-mixture fluid.")
 
-
     @property
     def mass_fractions(self) -> dict[str, float]:
         if isinstance(self._fluid, Mixture):
@@ -145,23 +143,19 @@ class FlowPort(ABC):
             self.fluid = self._fluid  # ✅ Force sync and notify node
         else:
             raise AttributeError("Cannot set mass fractions on non-mixture fluid.")
-        
-            
+
     def set_state(self, *, T=None, P=None, X=None):
         if not self._fluid:
             raise AttributeError("No fluid to set state on.")
         self._fluid.set_state(T=T, P=P, X=X)
 
 
-
-    
 class InFlow(FlowPort):
     def connect(self, other: FlowPort) -> None:
         if not isinstance(other, OutFlow):
             raise TypeError("InFlow can only connect to an OutFlow.")
         self._ensure_free(self, other)
 
-        # Let the node be created with None if both ports are fluidless
         shared_fluid = other.fluid or self.fluid
         node = FlowNode(shared_fluid)
 
@@ -169,10 +163,9 @@ class InFlow(FlowPort):
         self._connected_port = other
         other._connected_port = self
 
-        self.fluid = shared_fluid  # may be None
+        self.fluid = shared_fluid
         other.fluid = shared_fluid
         node.register_ports(self, other)
-
 
 
 class OutFlow(FlowPort):

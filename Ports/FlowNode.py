@@ -1,6 +1,6 @@
 from __future__ import annotations
 from typing import Optional, Iterable, List, TYPE_CHECKING
-from Fluids import Fluid, Mixture
+from Fluids import BaseFluid, Mixture
 
 if TYPE_CHECKING:
     from .FlowPort import FlowPort
@@ -9,24 +9,20 @@ if TYPE_CHECKING:
 class FlowNode:
     """
     Shared fluid state between two ports.
-    Carries one Fluid object that obeys two-input constraint.
+    Carries one BaseFluid object that obeys two-input constraint.
     """
     _counter = 0
 
-    def __init__(self, fluid_a: Optional[Fluid] = None, fluid_b: Optional[Fluid] = None) -> None:
+    def __init__(self, fluid_a: Optional[BaseFluid] = None, fluid_b: Optional[BaseFluid] = None) -> None:
         self.name = f"node_{FlowNode._counter}"
         FlowNode._counter += 1
 
         self._ports: List[FlowPort] = []
-        self._fluid: Optional[Fluid] = None
+        self._fluid: Optional[BaseFluid] = self._resolve_fluid(fluid_a, fluid_b)
 
-        # Decide which fluid to adopt
-        self._fluid = self._resolve_fluid(fluid_a, fluid_b)
-
-    def _resolve_fluid(self, a: Optional[Fluid], b: Optional[Fluid]) -> Optional[Fluid]:
+    def _resolve_fluid(self, a: Optional[BaseFluid], b: Optional[BaseFluid]) -> Optional[BaseFluid]:
         if a and b:
-            # Prioritize b (typically OutFlow), replace a
-            return b
+            return b  # Prioritize second
         return a or b
 
     # -------- Register ports --------
@@ -41,11 +37,11 @@ class FlowNode:
     # -------- Fluid interface --------
 
     @property
-    def fluid(self) -> Optional[Fluid]:
+    def fluid(self) -> Optional[BaseFluid]:
         return self._fluid
 
     @fluid.setter
-    def fluid(self, f: Fluid) -> None:
+    def fluid(self, f: BaseFluid) -> None:
         self._fluid = f
         for p in self._ports:
             p.fluid = f
@@ -86,16 +82,14 @@ class FlowNode:
 
     # -------- Adoption logic --------
 
-    def set_from_fluid(self, fluid: Fluid) -> None:
+    def set_from_fluid(self, fluid: BaseFluid) -> None:
         if self._fluid and self._fluid.name == fluid.name:
-            return  # same effective fluid
+            return  # Already compatible
         self.fluid = fluid
 
-
     def adopt_from_port(self, port: FlowPort) -> None:
-        if not port.fluid:
-            return
-        self.fluid = port.fluid  # Shared across all
+        if port.fluid:
+            self.fluid = port.fluid
 
     # -------- Mass flow helpers --------
 
@@ -130,7 +124,9 @@ class FlowNode:
             f"  P         = {self.P} Pa\n"
             f"  X         = {self.X}"
         )
-    
+
+    # -------- Mixture-specific support --------
+
     @property
     def mole_fractions(self) -> dict[str, float]:
         if isinstance(self._fluid, Mixture):
@@ -142,7 +138,7 @@ class FlowNode:
         if isinstance(self._fluid, Mixture):
             self._fluid.set_mole_fractions(new_fractions)
             for p in self._ports:
-                p.fluid = self._fluid  # ✅ re-sync
+                p.fluid = self._fluid
         else:
             raise AttributeError("Cannot set mole fractions on non-mixture fluid.")
 
@@ -157,6 +153,6 @@ class FlowNode:
         if isinstance(self._fluid, Mixture):
             self._fluid.set_mass_fractions(new_fractions)
             for p in self._ports:
-                p.fluid = self._fluid  # ✅ re-sync
+                p.fluid = self._fluid
         else:
             raise AttributeError("Cannot set mass fractions on non-mixture fluid.")

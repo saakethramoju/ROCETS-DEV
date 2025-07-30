@@ -64,7 +64,7 @@ mix = Mixture({"Methane": 0.6, "Ethane": 0.4}, fraction_type="mole", T=300, P=10
 #print("---------------------------------")
 #print(mix)
 
-'''
+
 inlet = Component("Inlet")
 inlet.add_outflow("Source")
 outlet = FluidStateOutlet("Outlet", "Source")
@@ -102,7 +102,7 @@ print(outlet["source"].node.mole_fractions)
 print(inlet)
 print(outlet)
 print(outlet["source"].node)
-print(inlet["source"].node)'''
+print(inlet["source"].node)
 
 
 
@@ -125,7 +125,4 @@ print(inlet["source"].node.mass_fractions)
 
 print(inlet["source"].fluid)'''
 
-
-fuel = Propellant("RP-1", T=300, P=101325)
-print(fuel)
 
