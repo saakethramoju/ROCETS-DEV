@@ -29,6 +29,28 @@ class Fluid(BaseFluid):
         if (T is not None) + (P is not None) + (X is not None) != 2:
             raise ValueError("Exactly two of T, P, X must be provided.")
 
+        Tmin = PropsSI("TMIN", "", 0, "", 0, self.name)
+        Tmax = PropsSI("TMAX", "", 0, "", 0, self.name)
+        Pmin = PropsSI("PMIN", "", 0, "", 0, self.name)
+        Pmax = PropsSI("PMAX", "", 0, "", 0, self.name)
+
+        # Clamp T within range
+        if T is not None and T < Tmin:
+            print(f"[!] Temperature {T} K is below Tmin ({Tmin} K) for {self.name}. Adjusting to Tmin + 0.01.")
+            T = Tmin + 0.01
+        elif T is not None and T > Tmax:
+            print(f"[!] Temperature {T} K is above Tmax ({Tmax} K) for {self.name}. Adjusting to Tmax - 0.01.")
+            T = Tmax - 0.01
+
+        # Clamp P within range
+        if P is not None and P < Pmin:
+            print(f"[!] Pressure {P} Pa is below Pmin ({Pmin} Pa) for {self.name}. Adjusting to Pmin + 100.")
+            P = Pmin + 100
+        elif P is not None and P > Pmax:
+            print(f"[!] Pressure {P} Pa is above Pmax ({Pmax} Pa) for {self.name}. Adjusting to Pmax - 100.")
+            P = Pmax - 100
+
+        # Save inputs
         if T is not None: self._T = T
         if P is not None: self._P = P
         if X is not None: self._X = X
@@ -39,6 +61,7 @@ class Fluid(BaseFluid):
             self._input_pair = ("T", "Q")
         elif P is not None and X is not None:
             self._input_pair = ("P", "Q")
+
 
     def _update_state(self):
         if self._input_pair == ("T", "P"):

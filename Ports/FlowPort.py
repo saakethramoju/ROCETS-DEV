@@ -13,7 +13,7 @@ class FlowPort(ABC):
     def __init__(self, name: str, fluid: Optional[BaseFluid] = None, parent: Optional["Component"] = None) -> None:
         if fluid is None:
             # Provide a default fluid like water
-            fluid = Fluid("Water", T=273.15, P=101325)  # You can tweak this fluid choice
+            fluid = Fluid("Water", T=298.15, P=101325)  # You can tweak this fluid choice
         self.name = name
         self.parent = parent
         self._fluid: Optional[BaseFluid] = fluid
@@ -108,9 +108,12 @@ class FlowPort(ABC):
 
     def __str__(self) -> str:
         role = self.__class__.__name__
+        phase = getattr(self._fluid, "phase", None)
+
         return (
             f"{role}('{self.name}')\n"
             f"  Fluid     = {self.fluid_name}\n"
+            f"  Phase     = {phase if phase is not None else '-'}\n"
             f"  T         = {self.T} K\n"
             f"  P         = {self.P} Pa\n"
             f"  X         = {self.X}\n"
@@ -118,6 +121,7 @@ class FlowPort(ABC):
             f"  Connected to = {self._connected_port.name if self._connected_port else 'None'}\n"
             f"  Node         = {self._node.name if self._node else 'None'}"
         )
+
 
     @property
     def mole_fractions(self) -> dict[str, float]:

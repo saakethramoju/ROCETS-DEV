@@ -20,6 +20,20 @@ class FlowNode:
         self._ports: List[FlowPort] = []
         self._fluid: Optional[BaseFluid] = self._resolve_fluid(fluid_a, fluid_b)
 
+    def is_boundary_node(self) -> bool:
+        """
+        Returns True if the node is connected to a boundary component.
+        A boundary node is one where any connected port's parent is an inlet or outlet boundary class.
+        """
+        inlet_boundary_types = {"MassFlowInlet", "FluidStateInlet", "Inlet"}
+        outlet_boundary_types = {"MassFlowOutlet", "FluidStateOutlet", "Outlet"}
+        boundary_classes = inlet_boundary_types | outlet_boundary_types
+
+        for port in self._ports:
+            if port.parent and port.parent.__class__.__name__ in boundary_classes:
+                return True
+        return False
+
     def _resolve_fluid(self, a: Optional[BaseFluid], b: Optional[BaseFluid]) -> Optional[BaseFluid]:
         if a and b:
             return b  # Prioritize second
@@ -117,9 +131,11 @@ class FlowNode:
         return f"<FlowNode {self.name} | fluid={self.fluid_name}, T={self.T}, P={self.P}, X={self.X}>"
 
     def __str__(self) -> str:
+        phase = getattr(self._fluid, "phase", None)
         return (
             f"FlowNode('{self.name}')\n"
             f"  Fluid     = {self.fluid_name}\n"
+            f"  Phase     = {phase if phase is not None else '-'}\n"
             f"  T         = {self.T} K\n"
             f"  P         = {self.P} Pa\n"
             f"  X         = {self.X}"
@@ -189,3 +205,21 @@ class FlowNode:
             return None  # placeholder
 
         return None  # invalid analysis type
+
+
+    def residual(self, analysis_type: str = "steady-state") -> list[float]:
+        """
+        Returns a list of residuals associated with this node for the given analysis type.
+        Currently includes only mass residual.
+
+        Future residuals (energy, species, etc.) can be added to this list.
+        """
+        residuals = []
+
+        mass = self.mass_residual(analysis_type=analysis_type)
+        if mass is not None:
+            residuals.append(mass)
+
+        # Add future residuals here (e.g., energy balance, species balance)
+
+        return residuals

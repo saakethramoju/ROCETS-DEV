@@ -103,8 +103,14 @@ class Pipe(Component):
         self.add_outflow("Drain")
 
     def evaluate(self):
-        if self["Source"].is_boundary((FluidStateInlet)):
-            return self.pipe1()
+        if self["Source"].is_boundary(FluidStateInlet):
+            result = self.pipe1()
+            # Propagate mass flow to connected boundaries
+            if self["Source"].connected_port:
+                self["Source"].connected_port.mass_flow = self["Source"].mass_flow
+            if self["Drain"].is_boundary(Outlet) and self["Drain"].connected_port:
+                self["Drain"].connected_port.mass_flow = self["Drain"].mass_flow
+            return result
         
     def pipe1(self):
         fluid1 = self["Source"].fluid
@@ -125,19 +131,7 @@ class Pipe(Component):
 
 
 
-
-'''
 pipe = Pipe("Runline")
-sys = System("Sys")
-sys.add_component(pipe)
-#sys.generate_input_template()
-sys.load_inputs("Sys_Inputs.yaml")
-print(pipe)'''
-
-
-
-pipe = Pipe("Runline")
-#print(pipe["dishcarge coefficient"])
 
 inlet = FluidStateInlet("Inlet", "Fluid Out")
 inlet.connect_ports("Fluid Out", pipe, "Source")
@@ -147,14 +141,39 @@ pipe.connect_ports("drain", outlet, "Fluid in")
 
 vespula = System("Vespula")
 vespula.add_component(pipe)
-
 #vespula.generate_configuration_template()
 vespula.load_configuration("Vespula_Configuration.yaml")
 #vespula.generate_input_template()
 vespula.load_inputs("Vespula_Inputs.yaml")
+vespula.evaluate(True)
+print(inlet)
+print(pipe)
+print(outlet)
 
-#print(pipe["dishcarge coefficient"])
-#print(inlet)
-#print(pipe)
+
+
+
+'''
+pipe = Pipe("Runline")
+sys = System("Sys")
+sys.add_component(pipe)
+#sys.generate_configuration_template()
+sys.load_configuration("Sys_Configuration.yaml")
+#sys.generate_input_template()
+sys.load_inputs("Sys_Inputs.yaml")
 print(pipe.evaluate())
+'''
 
+'''
+pipe = Pipe("Runline")
+sys = System("Sys")
+sys.add_component(pipe)
+outlet = FluidStateOutlet("Outlet", "Drain")
+outlet.connect(pipe)
+sys.generate_input_template()
+#sys.load_inputs("Sys_Inputs.yaml")
+print(pipe)'''
+
+
+#f = Fluid("Water", T = 200, P = 101325)
+#print(f)

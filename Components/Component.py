@@ -104,22 +104,24 @@ class Component:
             raise TypeError(f"Incompatible port types: {type(my_port).__name__} ↔ {type(their_port).__name__}")
 
 
-
     def __str__(self) -> str:
+        from prettytable import PrettyTable
 
         # ----- Flow Ports -----
         inflow_table = PrettyTable()
         outflow_table = PrettyTable()
         inflow_table.field_names = outflow_table.field_names = [
-            "Port", "Connected To", "Fluid", "T [K]", "P [Pa]", "X", "Mass Flow [kg/s]"
+            "Port", "Connected To", "Fluid", "Phase", "T [K]", "P [Pa]", "X", "Mass Flow [kg/s]"
         ]
 
         for port_name, port in self.inflows.items():
             conn = f"{port.connected_port.parent.name}.{port.connected_port.name}" if port.connected_port else "-"
+            phase = getattr(port.fluid, "phase", "-") if port.fluid else "-"
             inflow_table.add_row([
                 port_name,
                 conn,
-                port.fluid_name,
+                port.fluid_name or "-",
+                phase,
                 port.T if port.T is not None else "-",
                 port.P if port.P is not None else "-",
                 port.X if port.X is not None else "-",
@@ -128,10 +130,12 @@ class Component:
 
         for port_name, port in self.outflows.items():
             conn = f"{port.connected_port.parent.name}.{port.connected_port.name}" if port.connected_port else "-"
+            phase = getattr(port.fluid, "phase", "-") if port.fluid else "-"
             outflow_table.add_row([
                 port_name,
                 conn,
-                port.fluid_name,
+                port.fluid_name or "-",
+                phase,
                 port.T if port.T is not None else "-",
                 port.P if port.P is not None else "-",
                 port.X if port.X is not None else "-",
