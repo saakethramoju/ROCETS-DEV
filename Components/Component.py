@@ -1,11 +1,12 @@
 # Component.py
 from __future__ import annotations
-from typing import Dict, Iterator, Optional
+from typing import Dict, Iterator, Optional, TYPE_CHECKING
 from prettytable import PrettyTable
 import difflib
 from Ports import InFlow, OutFlow, FlowPort, PropertyIn, PropertyOut
 
-
+if TYPE_CHECKING:
+    from System import System 
 
 class Component:
 
@@ -17,6 +18,11 @@ class Component:
         self.outflows: Dict[str, OutFlow] = {}
         self.property_ins = {}
         self.property_outs = {}
+        self._system: Optional["System"] = None
+        self.configuration = {}
+
+        for key in self.configuration_keys:
+            self.configuration[key] = None
 
     def add_property_in(self, name: str) -> PropertyIn:
         if name in self.property_ins:
@@ -46,6 +52,12 @@ class Component:
         port = OutFlow(port_name, parent=self)  # ✅ pass parent
         self.outflows[port_name] = port
         return port
+            
+    def _maybe_expand_system(self, other: "Component"):
+        if self.system:
+            self.system.add_component(other)
+        elif other.system:
+            other.system.add_component(self)
 
 
     def connect_ports(self, my_port_name, other: Component, other_port_name):
@@ -74,23 +86,28 @@ class Component:
         if isinstance(my_port, OutFlow) and isinstance(their_port, InFlow):
             if not my_port.is_connected() and not their_port.is_connected():
                 my_port.connect(their_port)
+                self._maybe_expand_system(other)
         elif isinstance(my_port, InFlow) and isinstance(their_port, OutFlow):
             if not my_port.is_connected() and not their_port.is_connected():
                 their_port.connect(my_port)
+                self._maybe_expand_system(other)
         # PropertyPort: only Out → In
         elif isinstance(my_port, PropertyOut) and isinstance(their_port, PropertyIn):
             if not their_port.is_connected():
                 my_port.connect(their_port)
+                self._maybe_expand_system(other)
         elif isinstance(my_port, PropertyIn) and isinstance(their_port, PropertyOut):
             if not my_port.is_connected():
                 their_port.connect(my_port)
+                self._maybe_expand_system(other)
         else:
             raise TypeError(f"Incompatible port types: {type(my_port).__name__} ↔ {type(their_port).__name__}")
 
 
 
-
     def __str__(self) -> str:
+
+        # ----- Flow Ports -----
         inflow_table = PrettyTable()
         outflow_table = PrettyTable()
         inflow_table.field_names = outflow_table.field_names = [
@@ -98,9 +115,10 @@ class Component:
         ]
 
         for port_name, port in self.inflows.items():
+            conn = f"{port.connected_port.parent.name}.{port.connected_port.name}" if port.connected_port else "-"
             inflow_table.add_row([
                 port_name,
-                port.connected_port.name if port.connected_port else "-",
+                conn,
                 port.fluid_name,
                 port.T if port.T is not None else "-",
                 port.P if port.P is not None else "-",
@@ -109,9 +127,10 @@ class Component:
             ])
 
         for port_name, port in self.outflows.items():
+            conn = f"{port.connected_port.parent.name}.{port.connected_port.name}" if port.connected_port else "-"
             outflow_table.add_row([
                 port_name,
-                port.connected_port.name if port.connected_port else "-",
+                conn,
                 port.fluid_name,
                 port.T if port.T is not None else "-",
                 port.P if port.P is not None else "-",
@@ -119,13 +138,43 @@ class Component:
                 port.mass_flow if port.mass_flow is not None else "-"
             ])
 
+        # ----- Property Ports -----
+        prop_in_table = PrettyTable()
+        prop_out_table = PrettyTable()
+        prop_in_table.field_names = prop_out_table.field_names = [
+            "Port", "Connected To", "Value"
+        ]
+
+        for port_name, port in self.property_ins.items():
+            conn = f"{port.connected_port.parent.name}.{port.connected_port.name}" if port.connected_port else "-"
+            prop_in_table.add_row([
+                port_name,
+                conn,
+                port.value if port.value is not None else "-"
+            ])
+
+        for port_name, port in self.property_outs.items():
+            conn = f"{port.connected_port.parent.name}.{port.connected_port.name}" if port.connected_port else "-"
+            prop_out_table.add_row([
+                port_name,
+                conn,
+                port.value if port.value is not None else "-"
+            ])
+
+        # ----- Header Box -----
         title = f" COMPONENT: {self.name} "
         box_width = max(len(title), 30)
         border = "═" * box_width
-        centered_title = title.center(box_width)
+        header = f"╔{border}╗\n║{title.center(box_width)}║\n╚{border}╝"
 
-        header = f"╔{border}╗\n║{centered_title}║\n╚{border}╝"
-        return f"{header}\n\nInlets:\n{inflow_table}\n\nOutlets:\n{outflow_table}"
+        return (
+            f"{header}\n\n"
+            f"Inlets:\n{inflow_table}\n\n"
+            f"Outlets:\n{outflow_table}\n\n"
+            f"Property Ins:\n{prop_in_table}\n\n"
+            f"Property Outs:\n{prop_out_table}"
+        )
+
 
     def __repr__(self) -> str:
         return f"<Component {self.name}>"
@@ -156,6 +205,8 @@ class Component:
             for src, dst in connections:
                 print(f"  {src} → {dst}")
 
+        self._maybe_expand_system(other)
+
 
 
     def connect_all(self, other: "Component", print_summary: bool = False) -> None:
@@ -176,6 +227,8 @@ class Component:
                         except Exception:
                             continue
 
+        self._maybe_expand_system(other)
+
         # PropertyOut (other) → PropertyIn (self)
         for their_name, their_out in other.property_outs.items():
             for my_name, my_in in self.property_ins.items():
@@ -193,6 +246,9 @@ class Component:
             for src, dst in summary:
                 print(f"  {src} → {dst}")
 
+    @property
+    def system(self) -> Optional["System"]:
+        return self._system
 
 
     # ---- dict-like access ----
@@ -209,31 +265,48 @@ class Component:
 
     def __getitem__(self, key: str):
         match = self._fuzzy_find_port_name(key)
-        if not match:
-            raise KeyError(f"No port similar to '{key}' on component '{self.name}'")
+        if match:
+            if match in self.inflows:
+                return self.inflows[match]
+            if match in self.outflows:
+                return self.outflows[match]
+            if match in self.property_ins:
+                return self.property_ins[match].value
+            if match in self.property_outs:
+                return self.property_outs[match].value
 
-        if match in self.inflows:
-            return self.inflows[match]
-        if match in self.outflows:
-            return self.outflows[match]
-        if match in self.property_ins:
-            return self.property_ins[match].value
-        if match in self.property_outs:
-            return self.property_outs[match].value
+        # If no matching port, try configuration keys (case-insensitive match)
+        config_key = self._fuzzy_find_config_key(key)
+        if config_key:
+            return self.configuration.get(config_key)
 
-        raise KeyError(f"No matching port found for '{key}' on component '{self.name}'")
+        raise KeyError(f"No port or configuration key similar to '{key}' on component '{self.name}'")
+
 
     def __setitem__(self, key: str, value):
         match = self._fuzzy_find_port_name(key)
-        if not match:
-            raise KeyError(f"No port similar to '{key}' on component '{self.name}'")
+        if match:
+            if match in self.property_ins:
+                raise AttributeError("Cannot assign value to PropertyIn; must connect it to a PropertyOut.")
+            elif match in self.property_outs:
+                self.property_outs[match].value = value
+            else:
+                raise KeyError(f"Cannot assign value to non-property port '{key}'")
+            return
 
-        if match in self.property_ins:
-            raise AttributeError("Cannot assign value to PropertyIn; must connect it to a PropertyOut.")
-        elif match in self.property_outs:
-            self.property_outs[match].value = value
-        else:
-            raise KeyError(f"Cannot assign value to non-property port '{key}'")
+        # Fallback to configuration
+        config_key = self._fuzzy_find_config_key(key)
+        if config_key:
+            self.configuration[config_key] = value
+            return
+
+        raise KeyError(f"No port or configuration key similar to '{key}' on component '{self.name}'")
+        
+    def _fuzzy_find_config_key(self, key: str) -> Optional[str]:
+        matches = difflib.get_close_matches(key, self.configuration_keys, n=1, cutoff=0.8)
+        return matches[0] if matches else None
+
+
 
     def __contains__(self, key: str) -> bool:
         return key in self.inflows or key in self.outflows
