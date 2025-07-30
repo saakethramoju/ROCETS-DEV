@@ -324,3 +324,6 @@ class Component:
             base.update(self.property_outs)
         return base
 
+    def evaluate(self):
+        """Evaluate this component to update its outflows based on inputs."""
+        return  # Overridden by subclasses

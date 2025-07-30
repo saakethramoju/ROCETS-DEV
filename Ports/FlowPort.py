@@ -3,7 +3,7 @@ from abc import ABC, abstractmethod
 from typing import Optional, TYPE_CHECKING
 
 from .FlowNode import FlowNode
-from Fluids import BaseFluid, Mixture
+from Fluids import BaseFluid, Mixture, Fluid
 
 if TYPE_CHECKING:
     from Components.Component import Component
@@ -11,6 +11,9 @@ if TYPE_CHECKING:
 
 class FlowPort(ABC):
     def __init__(self, name: str, fluid: Optional[BaseFluid] = None, parent: Optional["Component"] = None) -> None:
+        if fluid is None:
+            # Provide a default fluid like water
+            fluid = Fluid("Water", T=273.15, P=101325)  # You can tweak this fluid choice
         self.name = name
         self.parent = parent
         self._fluid: Optional[BaseFluid] = fluid
@@ -148,6 +151,30 @@ class FlowPort(ABC):
         if not self._fluid:
             raise AttributeError("No fluid to set state on.")
         self._fluid.set_state(T=T, P=P, X=X)
+
+
+    def is_boundary(self, *boundary_classes: type) -> bool:
+        """
+        Return True if this port is:
+        1) Not connected, or
+        2) Connected to a port whose parent is an instance of any given boundary class or its subclass.
+        
+        Parameters:
+            *boundary_classes: Variable number of class references to check against.
+            
+        Returns:
+            bool: True if unconnected or connected to specified boundary types.
+        """
+        if self.connected_port is None:
+            return True
+
+        parent = self.connected_port.parent
+        if parent is None:
+            return False
+
+        return any(isinstance(parent, cls) for cls in boundary_classes)
+
+
 
 
 class InFlow(FlowPort):

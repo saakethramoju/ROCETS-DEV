@@ -1,7 +1,8 @@
 from Fluids import Fluid, Mixture, Propellant
 from Ports import InFlow, OutFlow
-from Components import Component, MassFlowOutlet, MassFlowInlet, FluidStateInlet, FluidStateOutlet
+from Components import Component, MassFlowOutlet, MassFlowInlet, FluidStateInlet, FluidStateOutlet, Inlet, Outlet
 from System import System
+import numpy as np
 '''
 
 inlet = Component("Inlet")
@@ -101,16 +102,59 @@ class Pipe(Component):
         self.add_inflow("Source")
         self.add_outflow("Drain")
 
+    def evaluate(self):
+        if self["Source"].is_boundary((FluidStateInlet)):
+            return self.pipe1()
+        
+    def pipe1(self):
+        fluid1 = self["Source"].fluid
+        fluid2 = self["Drain"].fluid
+
+        dp = self["Source"].P - self["Drain"].P
+        rho = fluid1.density
+        Cd = self["Discharge Coefficient"]
+        A = self["Cross-Sectional Area (sq. m.)"]
+
+        mdot = Cd*A*np.sqrt(2*rho*dp)
+
+        self["Source"].mass_flow = mdot
+        self["Drain"].mass_flow = mdot
+        self["Drain"].fluid = Fluid(fluid1.name, P=fluid2.P, T=fluid2.T)
+
+        return f"Fluid out: {fluid2.name}, Mass Flow (kg/s): {mdot:.3f}"
+
+
+
+
+'''
+pipe = Pipe("Runline")
+sys = System("Sys")
+sys.add_component(pipe)
+#sys.generate_input_template()
+sys.load_inputs("Sys_Inputs.yaml")
+print(pipe)'''
+
+
+
 pipe = Pipe("Runline")
 #print(pipe["dishcarge coefficient"])
+
 inlet = FluidStateInlet("Inlet", "Fluid Out")
 inlet.connect_ports("Fluid Out", pipe, "Source")
+
+outlet = FluidStateOutlet("Outlet", "Fluid In")
+pipe.connect_ports("drain", outlet, "Fluid in")
 
 vespula = System("Vespula")
 vespula.add_component(pipe)
 
-print(vespula)
 #vespula.generate_configuration_template()
 vespula.load_configuration("Vespula_Configuration.yaml")
+#vespula.generate_input_template()
+vespula.load_inputs("Vespula_Inputs.yaml")
 
-print(pipe["dishcarge coefficient"])
+#print(pipe["dishcarge coefficient"])
+#print(inlet)
+#print(pipe)
+print(pipe.evaluate())
+

@@ -156,3 +156,36 @@ class FlowNode:
                 p.fluid = self._fluid
         else:
             raise AttributeError("Cannot set mass fractions on non-mixture fluid.")
+
+
+    def mass_residual(self, analysis_type: str = "steady-state") -> Optional[float]:
+        """
+        Compute mass conservation residual:
+            steady-state: m_dot_out - m_dot_in
+            transient: not yet implemented
+
+        Returns:
+            float residual or None if mass flows are undefined or analysis unsupported.
+        """
+        if analysis_type == "steady-state":
+            if len(self._ports) != 2:
+                return None  # ill-formed node
+
+            a, b = self._ports
+            if a.mass_flow is None or b.mass_flow is None:
+                return None
+
+            # Find inflow/outflow
+            if a.__class__.__name__ == "InFlow":
+                m_out, m_in = a.mass_flow, b.mass_flow
+            elif b.__class__.__name__ == "InFlow":
+                m_out, m_in = b.mass_flow, a.mass_flow
+            else:
+                return None  # malformed node (shouldn’t happen)
+
+            return m_out - m_in
+
+        elif analysis_type == "transient":
+            return None  # placeholder
+
+        return None  # invalid analysis type
