@@ -1,6 +1,9 @@
 # Configuration Template for System: Vespula
 # Fill in values for each component’s configuration.
 
-Runline:
+Runline2:
   Discharge Coefficient: 0.6
   Cross-Sectional Area (sq. m.): 0.8e-5
+Runline1:
+  Discharge Coefficient: 0.7
+  Cross-Sectional Area (sq. m.): 0.85e-5

@@ -11,11 +11,75 @@ class System:
         self.name = name
         self.components: list[Component] = []
 
+
     def evaluate(self, verbose: bool = False):
-        for comp in self.components:
+        """Evaluate all components in upstream-to-downstream order."""
+        sorted_comps = self.topological_sort_components()
+
+        for comp in sorted_comps:
             if verbose:
                 print(f"Evaluating: {comp.name}")
             comp.evaluate()
+
+
+    def get_residual_vector(self, analysis_type: str = "steady-state") -> list[float]:
+        """
+        Gather all residuals from non-boundary nodes for the specified analysis type.
+
+        Returns:
+            List of floats representing system-wide residuals.
+        """
+        residuals = []
+        visited_nodes = set()
+
+        for comp in self.components:
+            for port in comp.ports().values():
+                node = port.node
+                if not node or node in visited_nodes or node.is_boundary_node():
+                    continue
+
+                visited_nodes.add(node)
+                node_res = node.residual(analysis_type=analysis_type)
+                residuals.extend(node_res)
+
+        return residuals
+
+    
+
+    def topological_sort_components(self) -> list[Component]:
+        from collections import defaultdict, deque
+
+        # Build dependency graph: A → B if A feeds into B
+        graph = defaultdict(set)
+        in_degree = {comp: 0 for comp in self.components}
+
+        for comp in self.components:
+            for port in comp.ports().values():
+                other = port.connected_port
+                if other and other.parent and other.parent is not comp:
+                    if port.__class__.__name__ == "OutFlow":
+                        src = comp
+                        dst = other.parent
+                        graph[src].add(dst)
+                        in_degree[dst] += 1
+
+        # Kahn's algorithm for topological sort
+        queue = deque([c for c in self.components if in_degree[c] == 0])
+        sorted_comps = []
+
+        while queue:
+            node = queue.popleft()
+            sorted_comps.append(node)
+            for neighbor in graph[node]:
+                in_degree[neighbor] -= 1
+                if in_degree[neighbor] == 0:
+                    queue.append(neighbor)
+
+        if len(sorted_comps) != len(self.components):
+            raise RuntimeError("Cycle detected in component graph.")
+
+        return sorted_comps
+
 
 
     def __str__(self) -> str:

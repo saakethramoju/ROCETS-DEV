@@ -2,12 +2,17 @@
 # Provide boundary condition inputs and initial guesses for internal nodes.
 
 Inlet: # Input
-  Node 0:
+  Node 1:
     Fluid: Water
-    Temperature (K): 300
+    Temperature (K):
     Pressure (Pa): 3.5e6
 
+Runline1:
+  Node 0:
+    Temperature (K):
+    Pressure (Pa): 2e6
+
 Outlet: # Input
-  Node 1:
-    Temperature (K): 300
+  Node 2:
+    Temperature (K):
     Pressure (Pa): 1e6

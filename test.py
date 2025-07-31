@@ -2,7 +2,9 @@ from Fluids import Fluid, Mixture, Propellant
 from Ports import InFlow, OutFlow
 from Components import Component, MassFlowOutlet, MassFlowInlet, FluidStateInlet, FluidStateOutlet, Inlet, Outlet
 from System import System
+
 import numpy as np
+from scipy.optimize import root_scalar
 '''
 
 inlet = Component("Inlet")
@@ -112,12 +114,25 @@ class Pipe(Component):
                 self["Drain"].connected_port.mass_flow = self["Drain"].mass_flow
             return result
         
+        else:
+            result = self.pipe2()
+
+            if self["Drain"].is_boundary(Outlet) and self["Drain"].connected_port:
+                self["Drain"].connected_port.mass_flow = self["Drain"].mass_flow
+            return result
+        
+        
     def pipe1(self):
         fluid1 = self["Source"].fluid
+
+        if self["Drain"].fluid_name != self["Source"].fluid_name:
+            self["Drain"].fluid = Fluid(fluid1.name, P=self["Drain"].fluid.P, T=self["Drain"].fluid.T)
+
         fluid2 = self["Drain"].fluid
 
+
         dp = self["Source"].P - self["Drain"].P
-        rho = fluid1.density
+        rho = fluid2.density
         Cd = self["Discharge Coefficient"]
         A = self["Cross-Sectional Area (sq. m.)"]
 
@@ -125,30 +140,76 @@ class Pipe(Component):
 
         self["Source"].mass_flow = mdot
         self["Drain"].mass_flow = mdot
-        self["Drain"].fluid = Fluid(fluid1.name, P=fluid2.P, T=fluid2.T)
+
+        #print(f"Fluid out: {fluid2.name}, Mass Flow (kg/s): {mdot:.3f}")
 
         return f"Fluid out: {fluid2.name}, Mass Flow (kg/s): {mdot:.3f}"
+    
+
+    def pipe2(self):
+        fluid1 = self["Source"].fluid
+        if self["Drain"].fluid_name != self["Source"].fluid_name:
+            self["Drain"].fluid = Fluid(fluid1.name, P=self["Drain"].fluid.P, T=self["Drain"].fluid.T)
+
+        fluid2 = self["Drain"].fluid
+
+        rho1 = fluid1.density
+        P1 = fluid1.P
+        
+        rho2 = fluid2.density
+        P2 = fluid2.P
+
+        Cd = self["Discharge Coefficient"]
+        A = self["Cross-Sectional Area (sq. m.)"]
+
+        def residual(mdot):
+            v1 = mdot / (rho1 * Cd * A)
+            v2 = mdot / (rho2 * Cd * A)
+            return (P2 + 0.5*rho2* v2**2) - (P1 + 0.5*rho1* v1**2)
+
+        mdot_guess = self["Source"].connected_port.mass_flow
+        #if mdot_guess is None:
+        #    mdot_guess = 1.0  # default fallback guess
+        sol = root_scalar(residual, x0=mdot_guess, method='newton')
+
+        if sol.converged:
+            mdot = sol.root
+            self["Source"].mass_flow = mdot
+            self["Drain"].mass_flow = mdot
+            return f"Fluid out: {fluid2.name}, Mass Flow (kg/s): {mdot:.3f}"
+        else:
+            raise RuntimeError(f"pipe2 in {self.name} failed to converge on mass flow rate.")
 
 
 
-pipe = Pipe("Runline")
+
+runline1 = Pipe("Runline1")
+runline2 = Pipe("Runline2")
+
+runline2.connect_ports("Source", runline1, "Drain")
 
 inlet = FluidStateInlet("Inlet", "Fluid Out")
-inlet.connect_ports("Fluid Out", pipe, "Source")
+inlet.connect_ports("Fluid Out", runline1, "Source")
 
 outlet = FluidStateOutlet("Outlet", "Fluid In")
-pipe.connect_ports("drain", outlet, "Fluid in")
+runline2.connect_ports("drain", outlet, "Fluid in")
 
 vespula = System("Vespula")
-vespula.add_component(pipe)
+vespula.add_component(runline2)
+
+print(vespula)
+
 #vespula.generate_configuration_template()
 vespula.load_configuration("Vespula_Configuration.yaml")
 #vespula.generate_input_template()
 vespula.load_inputs("Vespula_Inputs.yaml")
 vespula.evaluate(True)
 print(inlet)
-print(pipe)
+print(runline1)
+print(runline2)
 print(outlet)
+
+print(vespula.get_residual_vector())
 
 
 
