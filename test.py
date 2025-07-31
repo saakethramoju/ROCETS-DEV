@@ -5,25 +5,7 @@ from System import System
 
 import numpy as np
 from scipy.optimize import root_scalar
-'''
 
-inlet = Component("Inlet")
-inlet.add_outflow("Source")
-outlet = FluidStateOutlet("Outlet", "Source")
-
-inlet.connect(outlet, print_summary=True)
-
-print(inlet["source"])
-inlet["source"].fluid = Fluid("Oxygen", P=2e6, X=0.4)
-print(inlet["source"])
-print(outlet["source"])
-outlet["source"].P = 1e6
-#outlet["source"].T = 200
-print(inlet["source"])
-print(outlet["source"])
-inlet["source"].fluid.set_state(T=100, X=0.4)
-print(inlet["source"])
-print(outlet["source"].fluid)'''
 
 
 '''
@@ -69,22 +51,7 @@ print(inlet)
 print(outlet)
 print(outlet["source"].node)
 print(inlet["source"].node)
-
-
-system = System("Vespula")
-
-system.add_component(inlet)
-
-print(system)
-
-thing = Component("Thing")
-thing.add_inflow("new source")
-thing.connect(inlet)
-print(system)
-
-#new_system = System("Subscale")
-#new_system.add_component(inlet)'''
-
+'''
 
 
 
@@ -145,7 +112,7 @@ class Pipe(Component):
 
         return f"Fluid out: {fluid2.name}, Mass Flow (kg/s): {mdot:.3f}"
     
-
+    '''
     def pipe2(self):
         fluid1 = self["Source"].fluid
         if self["Drain"].fluid_name != self["Source"].fluid_name:
@@ -168,8 +135,8 @@ class Pipe(Component):
             return (P2 + 0.5*rho2* v2**2) - (P1 + 0.5*rho1* v1**2)
 
         mdot_guess = self["Source"].connected_port.mass_flow
-        #if mdot_guess is None:
-        #    mdot_guess = 1.0  # default fallback guess
+        if mdot_guess is None or mdot_guess <= 0:
+            mdot_guess = 1.0  # default guess
         sol = root_scalar(residual, x0=mdot_guess, method='newton')
 
         if sol.converged:
@@ -178,8 +145,33 @@ class Pipe(Component):
             self["Drain"].mass_flow = mdot
             return f"Fluid out: {fluid2.name}, Mass Flow (kg/s): {mdot:.3f}"
         else:
-            raise RuntimeError(f"pipe2 in {self.name} failed to converge on mass flow rate.")
+            raise RuntimeError(f"pipe2 in {self.name} failed to converge on mass flow rate.")'''
+    
+    def pipe2(self):
+        fluid1 = self["Source"].fluid
+        if self["Drain"].fluid_name != self["Source"].fluid_name:
+            self["Drain"].fluid = Fluid(fluid1.name, P=self["Drain"].fluid.P, T=self["Drain"].fluid.T)
 
+        fluid2 = self["Drain"].fluid
+
+        rho1 = fluid1.density
+        P1 = fluid1.P
+        
+        rho2 = fluid2.density
+        P2 = fluid2.P
+
+        Cd = self["Discharge Coefficient"]
+        A = self["Cross-Sectional Area (sq. m.)"]
+
+        rho = np.mean([rho1, rho2])
+        dp = P1 - P2
+
+        mdot = Cd*A*np.sqrt(2*rho*dp)
+
+        self["Source"].mass_flow = mdot
+        self["Drain"].mass_flow = mdot
+
+        return f"Fluid out: {fluid2.name}, Mass Flow (kg/s): {mdot:.3f}"
 
 
 
@@ -210,7 +202,14 @@ print(runline2)
 print(outlet)
 
 print(vespula.get_residual_vector())
+print(vespula.get_guess_vector())
 
+vespula.solve()
+
+print(inlet)
+print(runline1)
+print(runline2)
+print(outlet)
 
 
 

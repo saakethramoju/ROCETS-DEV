@@ -1,15 +1,45 @@
 # System.py
 import os
 import yaml
-from collections import defaultdict
+from scipy.optimize import root
 from Components import Component
 from Fluids import Fluid
+from Ports import FlowNode
 
 
 class System:
     def __init__(self, name: str):
         self.name = name
         self.components: list[Component] = []
+
+
+    def solve(self, analysis_type: str = "steady-state", method: str = "hybr", tol: float = 1e-6):
+        """
+        Solves the system by finding the state vector (e.g. T, P at each node) that drives residuals to zero.
+        
+        Parameters:
+            analysis_type: e.g. 'steady-state' or 'transient'
+            method: scipy root-solving method (e.g., 'hybr', 'lm', 'broyden1', etc.)
+            tol: solver tolerance
+
+        Raises:
+            RuntimeError if solution fails.
+        """
+
+        def residual_func(x):
+            self.set_state_vector(x)
+            self.evaluate(verbose=False)
+            return self.get_residual_vector(analysis_type=analysis_type)
+
+        x0 = self.get_guess_vector()
+        result = root(residual_func, x0, method=method, tol=tol)
+
+        if result.success:
+            self.set_state_vector(result.x)
+            print(f"[✓] Converged in {result.nfev} evaluations.")
+        else:
+            raise RuntimeError(f"[✗] Solver failed: {result.message}")
+
 
 
     def evaluate(self, verbose: bool = False):
@@ -20,6 +50,34 @@ class System:
             if verbose:
                 print(f"Evaluating: {comp.name}")
             comp.evaluate()
+
+
+    def get_guess_vector(self) -> list[float]:
+        """
+        Get the initial guess vector [T, P, T, P, ...] for all non-boundary nodes.
+        """
+        guesses = []
+        for node in self._all_flow_nodes():
+            if not node.is_boundary_node():
+                guesses.append(node.T)
+                guesses.append(node.P)
+        return guesses
+
+    def set_state_vector(self, x: list[float]) -> None:
+        """
+        Assigns values from vector x to non-boundary nodes as [T, P] pairs.
+        """
+        i = 0
+        for node in self._all_flow_nodes():
+            if not node.is_boundary_node():
+                node.T = x[i]
+                node.P = x[i + 1]
+                i += 2
+
+
+    def _all_flow_nodes(self) -> set[FlowNode]:
+        return {port.node for comp in self.components for port in comp.ports().values() if port.node}
+
 
 
     def get_residual_vector(self, analysis_type: str = "steady-state") -> list[float]:

@@ -179,19 +179,16 @@ class FlowNode:
         Compute mass conservation residual:
             steady-state: m_dot_out - m_dot_in
             transient: not yet implemented
-
-        Returns:
-            float residual or None if mass flows are undefined or analysis unsupported.
         """
         if analysis_type == "steady-state":
             if len(self._ports) != 2:
                 return None  # ill-formed node
 
             a, b = self._ports
+
             if a.mass_flow is None or b.mass_flow is None:
                 return None
 
-            # Find inflow/outflow
             if a.__class__.__name__ == "InFlow":
                 m_out, m_in = a.mass_flow, b.mass_flow
             elif b.__class__.__name__ == "InFlow":
@@ -202,17 +199,67 @@ class FlowNode:
             return m_out - m_in
 
         elif analysis_type == "transient":
-            return None  # placeholder
+            return None  # not implemented
 
         return None  # invalid analysis type
+    
+
+
+    def energy_residual(self, analysis_type: str = "steady-state") -> Optional[float]:
+        """
+        Compute energy conservation residual:
+            steady-state: m_out*(h_out + ½v_out²) - m_in*(h_in + ½v_in²)
+            transient: not yet implemented
+        """
+        if analysis_type == "steady-state":
+            if len(self._ports) != 2:
+                return None  # ill-formed node
+
+            a, b = self._ports
+
+            if a.mass_flow is None or b.mass_flow is None:
+                return None
+            if a.fluid is None or b.fluid is None:
+                return None
+
+            if a.__class__.__name__ == "InFlow":
+                out_port, in_port = a, b
+            elif b.__class__.__name__ == "InFlow":
+                out_port, in_port = b, a
+            else:
+                return None  # malformed node
+
+            try:
+                m_in = in_port.mass_flow
+                m_out = out_port.mass_flow
+
+                rho_in = in_port.fluid.density
+                rho_out = out_port.fluid.density
+
+                v_in = m_in / rho_in # assume A = 1
+                v_out = m_out / rho_out
+
+
+                h_in = in_port.fluid.enthalpy
+                h_out = out_port.fluid.enthalpy
+
+
+                return m_out * (h_out + 0.5 * v_out**2) - m_in * (h_in + 0.5 * v_in**2)
+
+            except (AttributeError, ZeroDivisionError):
+                return None
+
+        elif analysis_type == "transient":
+            return None  # not implemented
+
+        return None  # invalid analysis type
+
 
 
     def residual(self, analysis_type: str = "steady-state") -> list[float]:
         """
         Returns a list of residuals associated with this node for the given analysis type.
-        Currently includes only mass residual.
-
-        Future residuals (energy, species, etc.) can be added to this list.
+        Includes mass and energy residuals if defined.
         """
         residuals = []
 
@@ -220,6 +267,9 @@ class FlowNode:
         if mass is not None:
             residuals.append(mass)
 
-        # Add future residuals here (e.g., energy balance, species balance)
+        energy = self.energy_residual(analysis_type=analysis_type)
+        if energy is not None:
+            residuals.append(energy)
+            
 
         return residuals
