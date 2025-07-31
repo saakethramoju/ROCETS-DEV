@@ -3,16 +3,16 @@
 
 Inlet: # Input
   Node 1:
-    Fluid: Water
-    Temperature (K):
+    Fluid: Methane
+    Temperature (K): 100
     Pressure (Pa): 3.5e6
 
 Runline1:
   Node 0:
-    Temperature (K):
+    Temperature (K): 100
     Pressure (Pa): 2e6
 
 Outlet: # Input
   Node 2:
-    Temperature (K):
-    Pressure (Pa): 1e6
+    Temperature (K): 100
+    Pressure (Pa): 101325

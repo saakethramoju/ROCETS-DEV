@@ -2,8 +2,8 @@
 # Fill in values for each component’s configuration.
 
 Runline2:
-  Discharge Coefficient: 0.6
-  Cross-Sectional Area (sq. m.): 0.8e-5
+  Discharge Coefficient: 0.8
+  Cross-Sectional Area (sq. m.): 8.0e-4
 Runline1:
   Discharge Coefficient: 0.7
-  Cross-Sectional Area (sq. m.): 0.85e-5
+  Cross-Sectional Area (sq. m.): 7.0e-4

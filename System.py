@@ -13,7 +13,7 @@ class System:
         self.components: list[Component] = []
 
 
-    def solve(self, analysis_type: str = "steady-state", method: str = "hybr", tol: float = 1e-6):
+    def solve(self, analysis_type: str = "steady-state", method: str = "hybr", tol: float = 1e-6, verbose = False):
         """
         Solves the system by finding the state vector (e.g. T, P at each node) that drives residuals to zero.
         
@@ -25,18 +25,28 @@ class System:
         Raises:
             RuntimeError if solution fails.
         """
+        self.evaluate(verbose=False)
+        if len(self.get_state_vector()) < len( self.get_residual_vector(analysis_type=analysis_type)):
+            method = 'lm'
+
+        #print(self.get_state_vector())
+        #print(self.get_residual_vector(analysis_type=analysis_type))
+
 
         def residual_func(x):
             self.set_state_vector(x)
             self.evaluate(verbose=False)
+            print(self.get_state_vector())
+            #print(self.get_residual_vector(analysis_type=analysis_type))
             return self.get_residual_vector(analysis_type=analysis_type)
 
-        x0 = self.get_guess_vector()
+        x0 = self.get_state_vector()
         result = root(residual_func, x0, method=method, tol=tol)
 
         if result.success:
             self.set_state_vector(result.x)
-            print(f"[✓] Converged in {result.nfev} evaluations.")
+            if verbose:
+                print(f"[✓] Converged in {result.nfev} evaluations.")
         else:
             raise RuntimeError(f"[✗] Solver failed: {result.message}")
 
@@ -52,37 +62,52 @@ class System:
             comp.evaluate()
 
 
-    def get_guess_vector(self) -> list[float]:
-        """
-        Get the initial guess vector [T, P, T, P, ...] for all non-boundary nodes.
-        """
-        guesses = []
-        for node in self._all_flow_nodes():
-            if not node.is_boundary_node():
-                guesses.append(node.T)
-                guesses.append(node.P)
-        return guesses
+    def get_state_vector(self) -> list[float]:
+        x = []
+        visited_nodes = set()
 
-    def set_state_vector(self, x: list[float]) -> None:
-        """
-        Assigns values from vector x to non-boundary nodes as [T, P] pairs.
-        """
+        for comp in self.components:
+            for port in comp.ports().values():
+                node = port.node
+                if node and not node.is_boundary_node() and node not in visited_nodes:
+                    x.append(node.T)
+                    x.append(node.P)
+                    visited_nodes.add(node)
+
+        for comp in self.components:
+            for label, value in comp.get_additional_iteration_variables():
+                x.append(value)
+
+        return x
+
+
+    def set_state_vector(self, x: list[float]):
         i = 0
-        for node in self._all_flow_nodes():
-            if not node.is_boundary_node():
-                node.T = x[i]
-                node.P = x[i + 1]
-                i += 2
+        visited_nodes = set()
+
+        for comp in self.components:
+            for port in comp.ports().values():
+                node = port.node
+                if node and not node.is_boundary_node() and node not in visited_nodes:
+                    node.T = x[i]
+                    node.P = x[i + 1]
+                    i += 2
+                    visited_nodes.add(node)
+
+        for comp in self.components:
+            for label, _ in comp.get_additional_iteration_variables():
+                comp.set_additional_iteration_variable(label, x[i])
+                i += 1
+
 
 
     def _all_flow_nodes(self) -> set[FlowNode]:
         return {port.node for comp in self.components for port in comp.ports().values() if port.node}
 
 
-
     def get_residual_vector(self, analysis_type: str = "steady-state") -> list[float]:
         """
-        Gather all residuals from non-boundary nodes for the specified analysis type.
+        Gather all residuals from non-boundary nodes and components for the specified analysis type.
 
         Returns:
             List of floats representing system-wide residuals.
@@ -90,15 +115,27 @@ class System:
         residuals = []
         visited_nodes = set()
 
+        # Collect residuals from nodes
         for comp in self.components:
             for port in comp.ports().values():
                 node = port.node
-                if not node or node in visited_nodes or node.is_boundary_node():
-                    continue
+                if node and node not in visited_nodes and not node.is_boundary_node():
+                    visited_nodes.add(node)
+                    node_res = node.residual(analysis_type=analysis_type)
+                    if node_res is not None:
+                        if isinstance(node_res, list):
+                            residuals.extend(node_res)
+                        else:
+                            residuals.append(node_res)
 
-                visited_nodes.add(node)
-                node_res = node.residual(analysis_type=analysis_type)
-                residuals.extend(node_res)
+        # Collect residuals from components
+        for comp in self.components:
+            comp_res = comp.residual(analysis_type=analysis_type)
+            if comp_res is not None:
+                if isinstance(comp_res, list):
+                    residuals.extend(comp_res)
+                else:
+                    residuals.append(comp_res)
 
         return residuals
 
@@ -255,8 +292,8 @@ class System:
 
         print(f"[✓] Configuration loaded from: {os.path.abspath(filename)}")
 
+
     def generate_input_template(system, filename: str = None):
-        import os
 
         friendly_names = {
             "fluid_name": "Fluid",
@@ -343,6 +380,7 @@ class System:
                 comp_blocks[owner_label]["has_input"] = True
                 comp_blocks[owner_label]["nodes"].append((pseudo_label, input_vars, True))
 
+        # Write node-based inputs
         for comp_label, info in reversed(list(comp_blocks.items())):
             suffix = "  # Input" if info["has_input"] else ""
             lines.append(f"{comp_label}:{suffix}")
@@ -353,11 +391,37 @@ class System:
                     lines.append(f"    {label}:")
             lines.append("")
 
+        # Insert additional iteration variables directly into each component block
+        extra_vars_by_comp = {}
+        for comp in system.components:
+            for label, _ in comp.get_additional_iteration_variables():
+                comp_name, param_label = label.split(":", 1)
+                if comp_name not in extra_vars_by_comp:
+                    extra_vars_by_comp[comp_name] = []
+                extra_vars_by_comp[comp_name].append(param_label)
+
+        for comp_name, var_list in extra_vars_by_comp.items():
+            inserted = False
+            for i, line in enumerate(lines):
+                if line.strip().startswith(f"{comp_name}:"):
+                    insert_at = i + 1
+                    while insert_at < len(lines) and lines[insert_at].startswith("  "):
+                        insert_at += 1
+                    for var in var_list:
+                        lines.insert(insert_at, f"  {friendly_names.get(var, var)}:")
+                        insert_at += 1
+                    inserted = True
+                    break
+            if not inserted:
+                lines.append(f"{comp_name}:  # Initial Guess")
+                for var in var_list:
+                    lines.append(f"  {friendly_names.get(var, var)}:")
+                lines.append("")
+
         with open(filename, "w", encoding="utf-8") as f:
             f.write("\n".join(lines))
 
         print(f"[✓] Node input template written to: {os.path.abspath(filename)}")
-
 
     def load_inputs(self, filename: str):
 
@@ -410,7 +474,6 @@ class System:
 
                 temp_store = {"fluid_name": None, "T": None, "P": None, "X": None, "mass_flow": None}
 
-                # First pass: collect everything
                 for label, value in entries.items():
                     if value is None:
                         continue
@@ -421,7 +484,6 @@ class System:
                         continue
                     temp_store[var] = value
 
-                # Attempt to convert values
                 for key in ["T", "P", "X", "mass_flow"]:
                     val = temp_store[key]
                     if isinstance(val, str):
@@ -431,7 +493,6 @@ class System:
                             print(f"[!] Could not convert '{val}' to float for {key} — skipping.")
                             temp_store[key] = None
 
-                # Try to construct the Fluid object if we have enough info
                 fluid_name = temp_store["fluid_name"]
                 state_args = {k: temp_store[k] for k in ("T", "P", "X") if temp_store[k] is not None}
 
@@ -444,7 +505,6 @@ class System:
                 else:
                     fluid = None
 
-                # Apply to target
                 try:
                     if is_node:
                         if fluid:
@@ -465,4 +525,22 @@ class System:
                 except Exception as e:
                     print(f"[!] Failed to set inputs on '{node_label}': {e}")
 
+        # Load additional iteration variables
+        for comp in self.components:
+            expected_vars = comp.get_additional_iteration_variables()
+            if not expected_vars:
+                continue
+            comp_label = comp.name.replace("_", " ").title()
+            if comp_label not in raw:
+                continue
+            for label, _ in expected_vars:
+                _, var_name = label.split(":", 1)
+                field_value = raw[comp_label].get(var_name)
+                if field_value is not None:
+                    try:
+                        comp.set_additional_iteration_variable(label, float(field_value))
+                    except Exception:
+                        print(f"[!] Failed to parse value for {label}.")
+
         print(f"[✓] Loaded node inputs from: {os.path.abspath(filename)}")
+

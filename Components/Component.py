@@ -1,6 +1,6 @@
 # Component.py
 from __future__ import annotations
-from typing import Dict, Iterator, Optional, TYPE_CHECKING
+from typing import Dict, Iterator, Optional, Any, TYPE_CHECKING
 from prettytable import PrettyTable
 import difflib
 from Ports import InFlow, OutFlow, FlowPort, PropertyIn, PropertyOut
@@ -20,6 +20,7 @@ class Component:
         self.property_outs = {}
         self._system: Optional["System"] = None
         self.configuration = {}
+        self._residuals = []
 
         for key in self.configuration_keys:
             self.configuration[key] = None
@@ -330,4 +331,17 @@ class Component:
 
     def evaluate(self):
         """Evaluate this component to update its outflows based on inputs."""
+        #self._residuals = []
         return  # Overridden by subclasses
+
+
+    def get_additional_iteration_variables(self) -> list[tuple[str, Any]]:
+        """Return a list of (label, initial_value) tuples for global iteration variables."""
+        return []
+    
+    def set_additional_iteration_variable(self, label: str, value: float):
+        # Default: do nothing
+        pass
+
+    def residual(self, analysis_type: str = "steady-state") -> float | list[float]:
+        return getattr(self, "_residuals", [])
