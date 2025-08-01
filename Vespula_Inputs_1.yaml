@@ -1,0 +1,17 @@
+# Node Input Template for System: Vespula
+# Provide boundary condition inputs and initial guesses for internal nodes.
+
+Inlet: # Input
+  Node 1:
+    Fluid: Methane
+    Mass Flow (kg/s): 5
+
+Runline1:
+  Node 0:
+    Temperature (K): 100
+    Pressure (Pa): 3e5
+
+Outlet: # Input
+  Node 2:
+    Temperature (K): 100
+    Pressure (Pa): 1.5e5

@@ -1,6 +1,6 @@
 from Fluids import Fluid, Mixture, Propellant
 from Ports import InFlow, OutFlow
-from Components import Component, MassFlowOutlet, MassFlowInlet, FluidStateInlet, FluidStateOutlet, Inlet, Outlet
+from Components import Component, MassFlowOutlet, MassFlowInlet, FluidStateInlet, FluidStateOutlet, Inlet, Outlet, IncompressibleLine, Sensor
 from System import System
 
 from typing import Any
@@ -55,95 +55,50 @@ print(inlet["source"].node)
 '''
 
 
+'''
+def get_additional_iteration_variables(self) -> list[tuple[str, Any]]:
+    #if not self["Source"].is_boundary(Inlet):
+    #    return [(f"{self.name}:Mass Flow (kg/s)", self["Source"].mass_flow)]
+    return []
 
-class Pipe(Component):
+def set_additional_iteration_variable(self, label: str, value: float):
+    expected = f"{self.name}:Mass Flow (kg/s)"
+    if label == expected:
+        self["Source"].mass_flow = value
+'''
 
-    configuration_keys = [
-        "Discharge Coefficient",
-        "Cross-Sectional Area (sq. m.)"
-    ]
-
-    def __init__(self, name):
-        super().__init__(name)
-        self._initialize_default_ports()
-        self.configuration = {}
-
-    def _initialize_default_ports(self):
-        self.add_inflow("Source")
-        self.add_outflow("Drain")
-
-    '''
-    def get_additional_iteration_variables(self) -> list[tuple[str, Any]]:
-        #if not self["Source"].is_boundary(Inlet):
-        #    return [(f"{self.name}:Mass Flow (kg/s)", self["Source"].mass_flow)]
-        return []
-
-    def set_additional_iteration_variable(self, label: str, value: float):
-        expected = f"{self.name}:Mass Flow (kg/s)"
-        if label == expected:
-            self["Source"].mass_flow = value
-    '''
-    
-    def evaluate(self):
-        result = self.pipe1()
-        # Propagate mass flow to connected boundaries
-        if self["Source"].is_boundary(FluidStateInlet) and self["Source"].connected_port:
-            self["Source"].connected_port.mass_flow = self["Source"].mass_flow
-        if self["Drain"].is_boundary(FluidStateOutlet) and self["Drain"].connected_port:
-            self["Drain"].connected_port.mass_flow = self["Drain"].mass_flow
-        return result
-        
-    
-    def pipe1(self):
-        fluid1 = self["Source"].fluid
-        fluid2 = self["Drain"].fluid
-
-        if fluid2.name != fluid1.name:
-            self["Drain"].fluid = Fluid(fluid1.name, P=fluid2.P, T=fluid2.T)
-            fluid2 = self["Drain"].fluid
-
-        Cd  = self["Discharge Coefficient"]
-        A   = self["Cross-Sectional Area (sq. m.)"]
-
-        P1 = fluid1.P
-        P2 = fluid2.P
-
-        rho = np.mean([fluid1.density, fluid2.density])
-        mdot = np.sign(P1 - P2) * Cd * A * np.sqrt(2*rho*(np.abs(P1 - P2)))
-        # use this equation when using Cd directly. If trying use a friction factor
-        # momentum balance will use v1 and v2 to calculate mdot
-
-        self["Source"].mass_flow = mdot
-        self["Drain"].mass_flow = mdot
-
-        return f"Fluid out: {fluid2.name}, Mass Flow (kg/s): {mdot:.3f}"
-
-    #def pipe2(self)
-
-
-
-
-runline1 = Pipe("Runline1")
-runline2 = Pipe("Runline2")
+runline1 = IncompressibleLine("Runline1")
+runline2 = IncompressibleLine("Runline2")
 
 runline2.connect_ports("Source", runline1, "Drain")
 
 inlet = FluidStateInlet("Inlet", "Fluid Out")
 inlet.connect_ports("Fluid Out", runline1, "Source")
 
-outlet = FluidStateOutlet("Outlet", "Fluid In")
+outlet = MassFlowOutlet("Outlet", "Fluid In")
 runline2.connect_ports("drain", outlet, "Fluid in")
 
 vespula = System("Vespula")
 vespula.add_component(runline2)
 
+#runline1.print_properties()
+flow_meter1 = Sensor("Runline1 Flow Meter")
+flow_meter1.connect_ports("Value", runline1, "Mass Flow")
+
+flow_meter2 = Sensor("Runline2 Flow Meter")
+flow_meter2.connect_ports("Value", runline2, "Mass Flow")
+
 #vespula.generate_configuration_template()
 vespula.load_configuration("Vespula_Configuration.yaml")
 #vespula.generate_input_template()
-vespula.load_inputs("Vespula_Inputs.yaml")
+#vespula.load_inputs("Vespula_Inputs.yaml")
+#vespula.load_inputs("Vespula_Inputs_1.yaml")
+vespula.load_inputs("Vespula_Inputs_2.yaml")
 #vespula.evaluate(True)
 vespula.solve(verbose=True)
 print(inlet)
 print(runline1)
 print(runline2)
 print(outlet)
+print(flow_meter1)
+print(flow_meter2)

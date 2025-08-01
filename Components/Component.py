@@ -63,11 +63,21 @@ class Component:
 
     def connect_ports(self, my_port_name, other: Component, other_port_name):
         def fuzzy_lookup(name: str, port_dicts: list[dict]) -> Optional[object]:
+            def normalize(s: str) -> str:
+                return ''.join(c for c in s.lower() if c.isalnum())
+
+            name_norm = normalize(name)
             all_keys = {}
+            norm_to_actual = {}
+
             for d in port_dicts:
-                all_keys.update(d)
-            match = difflib.get_close_matches(name.lower(), all_keys.keys(), n=1, cutoff=0.6)
-            return all_keys.get(match[0]) if match else None
+                for key in d:
+                    norm_key = normalize(key)
+                    all_keys[norm_key] = d[key]
+                    norm_to_actual[norm_key] = key
+
+            match = difflib.get_close_matches(name_norm, all_keys.keys(), n=1, cutoff=0.6)
+            return all_keys[match[0]] if match else None
 
         my_port = fuzzy_lookup(
             my_port_name, [self.inflows, self.outflows, self.property_ins, self.property_outs]
@@ -159,7 +169,10 @@ class Component:
             ])
 
         for port_name, port in self.property_outs.items():
-            conn = f"{port.connected_port.parent.name}.{port.connected_port.name}" if port.connected_port else "-"
+            if port.connected_ports:
+                conn = ", ".join(f"{p.parent.name}.{p.name}" for p in port.connected_ports)
+            else:
+                conn = "-"
             prop_out_table.add_row([
                 port_name,
                 conn,
@@ -345,3 +358,25 @@ class Component:
 
     def residual(self, analysis_type: str = "steady-state") -> float | list[float]:
         return getattr(self, "_residuals", [])
+               
+                
+    def print_properties(self):
+        """Print the names of all property ports on this component, grouped by input and output."""
+        print(f"\nComponent: {self.name}")
+        print("-" * (len(self.name) + 11))  # underline
+
+        if self.property_outs:
+            print("\nPropertyOut ports:")
+            for name in self.property_outs:
+                print(f"  • {name}")
+        else:
+            print("\nPropertyOut ports: (none)")
+
+        if self.property_ins:
+            print("\nPropertyIn ports:")
+            for name in self.property_ins:
+                print(f"  • {name}")
+        else:
+            print("\nPropertyIn ports: (none)")
+
+        print()  # trailing newline for clarity

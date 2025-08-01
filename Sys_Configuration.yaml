@@ -1,6 +1,0 @@
-# Configuration Template for System: Sys
-# Fill in values for each component’s configuration.
-
-Runline:
-  Discharge Coefficient: 0.6
-  Cross-Sectional Area (sq. m.): 0.8e-5

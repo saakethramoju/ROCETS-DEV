@@ -229,8 +229,15 @@ class System:
             # Enqueue all connected components
             for port in list(comp.inflows.values()) + list(comp.outflows.values()) \
                     + list(comp.property_ins.values()) + list(comp.property_outs.values()):
-                if port.connected_port:
+
+                # Flow ports and PropertyIn: single connection
+                if hasattr(port, "connected_port") and port.connected_port:
                     queue.append(port.connected_port.parent)
+
+                # PropertyOut: multiple connections
+                elif hasattr(port, "connected_ports"):
+                    for target in port.connected_ports:
+                        queue.append(target.parent)
 
 
 
