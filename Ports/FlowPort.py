@@ -161,13 +161,13 @@ class FlowPort(ABC):
         """
         Return True if this port is:
         1) Not connected, or
-        2) Connected to a port whose parent is an instance of any given boundary class or its subclass.
+        2) Connected to a port whose parent is exactly one of the given boundary classes (not subclasses).
         
         Parameters:
             *boundary_classes: Variable number of class references to check against.
             
         Returns:
-            bool: True if unconnected or connected to specified boundary types.
+            bool: True if unconnected or connected to the exact specified boundary types.
         """
         if self.connected_port is None:
             return True
@@ -176,7 +176,7 @@ class FlowPort(ABC):
         if parent is None:
             return False
 
-        return any(isinstance(parent, cls) for cls in boundary_classes)
+        return any(type(parent) is cls for cls in boundary_classes)
 
 
 

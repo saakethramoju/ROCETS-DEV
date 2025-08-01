@@ -36,7 +36,7 @@ class System:
         def residual_func(x):
             self.set_state_vector(x)
             self.evaluate(verbose=False)
-            print(self.get_state_vector())
+            #print(self.get_state_vector())
             #print(self.get_residual_vector(analysis_type=analysis_type))
             return self.get_residual_vector(analysis_type=analysis_type)
 
@@ -425,6 +425,7 @@ class System:
 
     def load_inputs(self, filename: str):
 
+
         with open(filename, "r", encoding="utf-8") as f:
             raw = yaml.safe_load(f)
 
@@ -448,12 +449,16 @@ class System:
             for node in [port.node]
         }
 
-        pseudo_lookup = {
-            f"{comp.name.replace('_', ' ').title()}:{port.name.replace('_', ' ').title()}": port
-            for comp in self.components
-            for port in comp.ports().values()
-            if port.node is None and port.connected_port is None
-        }
+        pseudo_lookup = {}
+        for comp in self.components:
+            comp_label = comp.name.replace("_", " ").title()
+            for port in comp.ports().values():
+                if port.node is None:
+                    key_full = f"{comp_label}:{port.name.replace('_', ' ').title()}"
+                    key_simple = f"{comp_label}"
+                    pseudo_lookup[key_full] = port
+                    if len(comp.ports()) == 1:
+                        pseudo_lookup[key_simple] = port
 
         for comp_label, nodes in raw.items():
             if not isinstance(nodes, dict):
@@ -469,7 +474,7 @@ class System:
                     target = pseudo_lookup[node_label]
                     is_node = False
                 else:
-                    print(f"[!] Entry '{node_label}' not found — skipping.")
+                    print(f"[!] Entry '{node_label}' under '{comp_label}' not found — skipping.")
                     continue
 
                 temp_store = {"fluid_name": None, "T": None, "P": None, "X": None, "mass_flow": None}
@@ -494,38 +499,35 @@ class System:
                             temp_store[key] = None
 
                 fluid_name = temp_store["fluid_name"]
-                state_args = {k: temp_store[k] for k in ("T", "P", "X") if temp_store[k] is not None}
-
-                if fluid_name and len(state_args) >= 2:
-                    try:
-                        fluid = Fluid(fluid_name, **state_args)
-                    except Exception as e:
-                        print(f"[!] Failed to create Fluid({fluid_name}): {e}")
-                        fluid = None
-                else:
-                    fluid = None
 
                 try:
                     if is_node:
-                        if fluid:
-                            for port in target._ports:
-                                port.fluid = fluid
+                        if fluid_name:
+                            target.fluid = Fluid(fluid_name, T=298.15, P=101325)
                         if temp_store["mass_flow"] is not None:
                             for port in target._ports:
                                 port.mass_flow = temp_store["mass_flow"]
+                                if port.connected_port:
+                                    port.connected_port.mass_flow = temp_store["mass_flow"]
                         for k in ("T", "P", "X"):
                             if temp_store[k] is not None:
                                 setattr(target, k, temp_store[k])
                     else:
-                        if fluid:
+                        if fluid_name:
+                            fluid = Fluid(fluid_name, T=298.15, P=101325)
                             target.fluid = fluid
-                        for k in ("T", "P", "X", "mass_flow"):
+                            if target.connected_port:
+                                target.connected_port.fluid = fluid
+                        if temp_store["mass_flow"] is not None:
+                            target.mass_flow = temp_store["mass_flow"]
+                            if target.connected_port:
+                                target.connected_port.mass_flow = temp_store["mass_flow"]
+                        for k in ("T", "P", "X"):
                             if temp_store[k] is not None:
                                 setattr(target, k, temp_store[k])
                 except Exception as e:
                     print(f"[!] Failed to set inputs on '{node_label}': {e}")
 
-        # Load additional iteration variables
         for comp in self.components:
             expected_vars = comp.get_additional_iteration_variables()
             if not expected_vars:
@@ -543,4 +545,3 @@ class System:
                         print(f"[!] Failed to parse value for {label}.")
 
         print(f"[✓] Loaded node inputs from: {os.path.abspath(filename)}")
-
