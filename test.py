@@ -55,50 +55,38 @@ print(inlet["source"].node)
 '''
 
 
-'''
-def get_additional_iteration_variables(self) -> list[tuple[str, Any]]:
-    #if not self["Source"].is_boundary(Inlet):
-    #    return [(f"{self.name}:Mass Flow (kg/s)", self["Source"].mass_flow)]
-    return []
-
-def set_additional_iteration_variable(self, label: str, value: float):
-    expected = f"{self.name}:Mass Flow (kg/s)"
-    if label == expected:
-        self["Source"].mass_flow = value
-'''
-
 runline1 = IncompressibleLine("Runline1")
 runline2 = IncompressibleLine("Runline2")
-
-runline2.connect_ports("Source", runline1, "Drain")
-
 inlet = FluidStateInlet("Inlet", "Fluid Out")
-inlet.connect_ports("Fluid Out", runline1, "Source")
-
-outlet = MassFlowOutlet("Outlet", "Fluid In")
-runline2.connect_ports("drain", outlet, "Fluid in")
+#inlet = MassFlowInlet("Inlet", "Fluid Out")
+outlet = FluidStateOutlet("Outlet", "Fluid In")
+flow_meter1 = Sensor("Runline1 Flow Meter")
+flow_meter2 = Sensor("Runline2 Flow Meter")
 
 vespula = System("Vespula")
 vespula.add_component(runline2)
 
+runline2.connect_ports("Source", runline1, "Drain")
+inlet.connect_ports("Fluid Out", runline1, "Source")
+runline2.connect_ports("drain", outlet, "Fluid in")
 #runline1.print_properties()
-flow_meter1 = Sensor("Runline1 Flow Meter")
 flow_meter1.connect_ports("Value", runline1, "Mass Flow")
-
-flow_meter2 = Sensor("Runline2 Flow Meter")
 flow_meter2.connect_ports("Value", runline2, "Mass Flow")
 
 #vespula.generate_configuration_template()
 vespula.load_configuration("Vespula_Configuration.yaml")
 #vespula.generate_input_template()
-#vespula.load_inputs("Vespula_Inputs.yaml")
+vespula.load_inputs("Vespula_Inputs.yaml")
 #vespula.load_inputs("Vespula_Inputs_1.yaml")
-vespula.load_inputs("Vespula_Inputs_2.yaml")
-#vespula.evaluate(True)
-vespula.solve(verbose=True)
+vespula.evaluate(True)
+#vespula.solve(verbose=True)
+
+
 print(inlet)
 print(runline1)
 print(runline2)
 print(outlet)
 print(flow_meter1)
 print(flow_meter2)
+
+

@@ -3,15 +3,20 @@
 
 Inlet: # Input
   Node 1:
-    Fluid: Methane
-    Mass Flow (kg/s): 5
+    Fluid:
+    Mass Flow (kg/s): 0.1
+    # Specify binary mixture below if needed
+    Constituents:
+      Oxygen: 0.21 # Replace with name of substance
+      Nitrogen: 0.79 # Replace with name of substance
+    Fraction Type: mass # Define with mole or mass fractions
 
 Runline1:
   Node 0:
-    Temperature (K): 100
-    Pressure (Pa): 3e5
+    Temperature (K): 300
+    Pressure (Pa): 1.5e6
 
 Outlet: # Input
   Node 2:
-    Temperature (K): 100
-    Pressure (Pa): 1.5e5
+    Temperature (K): 300
+    Pressure (Pa): 101325

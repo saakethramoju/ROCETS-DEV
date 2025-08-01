@@ -140,6 +140,12 @@ class IncompressibleLine(Component):
         sign = np.sign(mdot)
         P1 = (mdot / (Cd * A))**2 / (2 * rho) + sign * P2
         T1 = Fluid.get_temperature_from_Ph(f1.name, P1, h2)
+        """
+        if isinstance(f1, Mixture):
+            T1 = Mixture.get_temperature_from_Ph(f1.components, P1, h2, f1.fraction_type, debug=True)
+        else:
+            T1 = Fluid.get_temperature_from_Ph(f1.name, P1, h2, debug=True)"""
+
 
         source.P = P1
         source.T = T1
@@ -169,6 +175,12 @@ class IncompressibleLine(Component):
         sign = np.sign(mdot)
         P2 = P1 - sign * (mdot / (Cd * A))**2 / (2 * rho)
         T2 = Fluid.get_temperature_from_Ph(f1.name, P2, h1)
+        """
+        if isinstance(f1, Mixture):
+            T2 = Mixture.get_temperature_from_Ph(f1.components, P2, h1, f1.fraction_type, debug=True)
+        else:
+            T2 = Fluid.get_temperature_from_Ph(f1.name, P2, h1, debug=True)"""
+
 
         drain.P = P2
         drain.T = T2

@@ -3,7 +3,7 @@ import os
 import yaml
 from scipy.optimize import root
 from Components import Component
-from Fluids import Fluid
+from Fluids import Fluid, Mixture
 from Ports import FlowNode
 
 
@@ -387,7 +387,6 @@ class System:
                 comp_blocks[owner_label]["has_input"] = True
                 comp_blocks[owner_label]["nodes"].append((pseudo_label, input_vars, True))
 
-        # Write node-based inputs
         for comp_label, info in reversed(list(comp_blocks.items())):
             suffix = "  # Input" if info["has_input"] else ""
             lines.append(f"{comp_label}:{suffix}")
@@ -396,9 +395,14 @@ class System:
                 for var in var_list:
                     label = friendly_names.get(var, var)
                     lines.append(f"    {label}:")
+                if "fluid_name" in var_list:
+                    lines.append(f"    # Specify binary mixture below if needed")
+                    lines.append(f"    Constituents:")
+                    lines.append(f"      Constituent 1:   # Replace with name of substance")
+                    lines.append(f"      Constituent 2:   # Replace with name of substance")
+                    lines.append(f"    Fraction Type: mole  # Define with mole or mass fractions")
             lines.append("")
 
-        # Insert additional iteration variables directly into each component block
         extra_vars_by_comp = {}
         for comp in system.components:
             for label, _ in comp.get_additional_iteration_variables():
@@ -429,6 +433,7 @@ class System:
             f.write("\n".join(lines))
 
         print(f"[✓] Node input template written to: {os.path.abspath(filename)}")
+
 
     def load_inputs(self, filename: str):
 
@@ -485,32 +490,59 @@ class System:
                     continue
 
                 temp_store = {"fluid_name": None, "T": None, "P": None, "X": None, "mass_flow": None}
+                components = None
+                fraction_type = "mole"
 
                 for label, value in entries.items():
                     if value is None:
                         continue
                     clean_label = label.split(" #")[0].strip()
-                    var = label_to_var.get(clean_label)
-                    if not var:
-                        print(f"[!] Unknown variable '{label}' — skipping.")
-                        continue
-                    temp_store[var] = value
+                    if clean_label == "Constituents" and isinstance(value, dict):
+                        components = value
+                    elif clean_label == "Fraction Type" and isinstance(value, str):
+                        fraction_type = value.lower()
+                    else:
+                        var = label_to_var.get(clean_label)
+                        if var:
+                            temp_store[var] = value
 
-                for key in ["T", "P", "X", "mass_flow"]:
-                    val = temp_store[key]
-                    if isinstance(val, str):
+                for key in ("T", "P", "X", "mass_flow"):
+                    if isinstance(temp_store[key], str):
                         try:
-                            temp_store[key] = float(val)
+                            temp_store[key] = float(temp_store[key])
                         except ValueError:
-                            print(f"[!] Could not convert '{val}' to float for {key} — skipping.")
+                            print(f"[!] Could not convert '{temp_store[key]}' to float for {key} — skipping.")
                             temp_store[key] = None
 
                 fluid_name = temp_store["fluid_name"]
+                T, P, X = temp_store["T"], temp_store["P"], temp_store["X"]
 
                 try:
+                    fluid_obj = None
+                    if fluid_name:
+                        fluid_obj = Fluid(fluid_name, T=T or 298.15, P=P or 101325)
+                    elif components:
+                        clean_components = {k: float(v) for k, v in components.items()}
+                        if len(clean_components) == 1:
+                            name = next(iter(clean_components))
+                            fluid_obj = Fluid(name, T=T or 298.15, P=P or 101325)
+                        else:
+                            total_frac = sum(clean_components.values())
+                            if abs(total_frac - 1.0) > 1e-6:
+                                raise ValueError(
+                                    f"Fractions for mixture at '{node_label}' under '{comp_label}' must sum to 1.0 "
+                                    f"(currently {total_frac:.4f})."
+                                )
+                            fluid_obj = Mixture(
+                                clean_components,
+                                fraction_type=fraction_type,
+                                T=T if T is not None else 298.15,
+                                P=P if P is not None else 101325,
+                                X=X,
+                            )
                     if is_node:
-                        if fluid_name:
-                            target.fluid = Fluid(fluid_name, T=298.15, P=101325)
+                        if fluid_obj:
+                            target.fluid = fluid_obj
                         if temp_store["mass_flow"] is not None:
                             for port in target._ports:
                                 port.mass_flow = temp_store["mass_flow"]
@@ -520,11 +552,10 @@ class System:
                             if temp_store[k] is not None:
                                 setattr(target, k, temp_store[k])
                     else:
-                        if fluid_name:
-                            fluid = Fluid(fluid_name, T=298.15, P=101325)
-                            target.fluid = fluid
+                        if fluid_obj:
+                            target.fluid = fluid_obj
                             if target.connected_port:
-                                target.connected_port.fluid = fluid
+                                target.connected_port.fluid = fluid_obj
                         if temp_store["mass_flow"] is not None:
                             target.mass_flow = temp_store["mass_flow"]
                             if target.connected_port:
@@ -532,8 +563,9 @@ class System:
                         for k in ("T", "P", "X"):
                             if temp_store[k] is not None:
                                 setattr(target, k, temp_store[k])
+
                 except Exception as e:
-                    print(f"[!] Failed to set inputs on '{node_label}': {e}")
+                    raise Exception(f"[!] Failed to set inputs on '{node_label}': {e}")
 
         for comp in self.components:
             expected_vars = comp.get_additional_iteration_variables()

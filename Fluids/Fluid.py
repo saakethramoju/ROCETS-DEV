@@ -263,15 +263,14 @@ class Fluid(BaseFluid):
 
 
     @classmethod
-    def get_temperature_from_Ph(cls, name: str, P: float, target_h: float):
+    def get_temperature_from_Ph(cls, name: str, P: float, target_h: float, debug=False):
         """
         Returns a Fluid instance initialized using pressure and enthalpy (P, H).
         Solves for T that gives the desired enthalpy.
         """
-        dummy = cls(name, T=300, P=P)  # temp init to access limits
-
-        Tmin = dummy.min_temperature + 1.0
-        Tmax = dummy.max_temperature - 1.0
+        dummy = cls(name, T=300, P=P)
+        Tmin = max(dummy.min_temperature or 50, 50) + 0.1
+        Tmax = dummy.max_temperature - 100
 
         def residual(T):
             try:
@@ -282,14 +281,22 @@ class Fluid(BaseFluid):
 
         r1 = residual(Tmin)
         r2 = residual(Tmax)
-        if r1 * r2 > 0:
+
+        if debug:
+            print(f"[DEBUG] Fluid.get_temperature_from_Ph()")
+            print(f"        Target h = {target_h:.2f} J/kg at P = {P:.2f} Pa")
+            print(f"        Tmin = {Tmin:.2f} K, Tmax = {Tmax:.2f} K")
+            print(f"        h(Tmin) = {r1 + target_h:.2f}, h(Tmax) = {r2 + target_h:.2f}")
+
+        if any(r != r or abs(r) > 1e7 for r in (r1, r2)) or r1 * r2 > 0:
             raise ValueError(
-                f"Target enthalpy {target_h:.2f} J/kg is outside the achievable range at {P:.2f} Pa.\n"
-                f"Approx. enthalpy range: [{r1 + target_h:.2f}, {r2 + target_h:.2f}]"
+                f"[Fluid] Target enthalpy {target_h:.2f} J/kg is outside the achievable range at {P:.2f} Pa.\n"
+                f"  Approximate enthalpy range: [{r1 + target_h:.2f}, {r2 + target_h:.2f}]"
             )
 
         sol = root_scalar(residual, bracket=[Tmin, Tmax], method="brentq")
+
         if not sol.converged:
-            raise RuntimeError("Failed to converge to solution for T given P and h.")
+            raise RuntimeError("[Fluid] Failed to converge to solution for T given P and h.")
 
         return sol.root
