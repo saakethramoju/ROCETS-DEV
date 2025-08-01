@@ -1,3 +1,4 @@
+import pandas as pd
 from .Component import Component
 
 
@@ -20,6 +21,19 @@ class Inlet(Component):
             f"  X: {p.X if p.X is not None else '-'}\n"
             f"  Mass Flow [kg/s]: {p.mass_flow if p.mass_flow is not None else '-'}"
         )
+    
+    def get_results_dataframe(self):
+        p = self.outflow
+        if not p:
+            return None
+        return pd.DataFrame([{
+            "Port": p.name,
+            "Fluid": str(p.fluid_name) if p.fluid else "-",
+            "T [K]": p.T,
+            "P [Pa]": p.P,
+            "X": p.X,
+            "Mass Flow [kg/s]": p.mass_flow,
+        }])
 
 
 class Outlet(Component):
@@ -41,6 +55,21 @@ class Outlet(Component):
             f"  X: {p.X if p.X is not None else '-'}\n"
             f"  Mass Flow [kg/s]: {p.mass_flow if p.mass_flow is not None else '-'}"
         )
+    
+    
+    def get_results_dataframe(self):
+        p = self.inflow
+        if not p:
+            return None
+        return pd.DataFrame([{
+            "Port": p.name,
+            "Fluid": str(p.fluid_name) if p.fluid else "-",
+            "T [K]": p.T,
+            "P [Pa]": p.P,
+            "X": p.X,
+            "Mass Flow [kg/s]": p.mass_flow,
+        }])
+
 
 
 # Subclasses for explicit boundary types

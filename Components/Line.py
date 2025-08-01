@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 from Fluids import Fluid
 from Components import (
     Component, MassFlowOutlet, MassFlowInlet,
@@ -187,3 +188,21 @@ class IncompressibleLine(Component):
         source.mass_flow = mdot
 
         return mdot
+    
+
+    def get_results_dataframe(self):
+        data = []
+        for port_name, port in self.ports().items():
+            if port.node:
+                fluid = port.node.fluid
+                row = {
+                    "Port": port_name,
+                    "T [K]": port.node.T,
+                    "P [Pa]": port.node.P,
+                    "Density [kg/m3]": fluid.density,
+                    "Enthalpy [J/kg]": fluid.enthalpy,
+                    "Mass Flow [kg/s]": port.mass_flow,
+                }
+                data.append(row)
+        return pd.DataFrame(data)
+

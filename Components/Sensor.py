@@ -1,4 +1,5 @@
 # Sensor.py
+import pandas as pd
 from Components import Component
 
 class Sensor(Component):
@@ -22,3 +23,10 @@ class Sensor(Component):
 
     def __str__(self):
         return f"{self.name}: {self.input_port.value}"
+
+
+    def get_results_dataframe(self):
+        return pd.DataFrame([{
+            "Sensor Name": self.name,
+            "Value": self.input_port.value
+        }])

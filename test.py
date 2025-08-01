@@ -78,8 +78,8 @@ vespula.load_configuration("Vespula_Configuration.yaml")
 #vespula.generate_input_template()
 vespula.load_inputs("Vespula_Inputs.yaml")
 #vespula.load_inputs("Vespula_Inputs_1.yaml")
-vespula.evaluate(True)
-#vespula.solve(verbose=True)
+#vespula.evaluate(True)
+vespula.solve(verbose=True)
 
 
 print(inlet)
@@ -88,5 +88,7 @@ print(runline2)
 print(outlet)
 print(flow_meter1)
 print(flow_meter2)
+
+vespula.export()
 
 

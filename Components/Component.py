@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Dict, Iterator, Optional, Any, TYPE_CHECKING
 from prettytable import PrettyTable
 import difflib
+import pandas as pd
 from Ports import InFlow, OutFlow, FlowPort, PropertyIn, PropertyOut
 
 if TYPE_CHECKING:
@@ -380,3 +381,7 @@ class Component:
             print("\nPropertyIn ports: (none)")
 
         print()  # trailing newline for clarity
+
+    def get_results_dataframe(self) -> Optional[pd.DataFrame]:
+        ...
+

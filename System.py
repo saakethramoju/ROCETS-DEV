@@ -1,6 +1,8 @@
 # System.py
 import os
 import yaml
+import pandas as pd
+from datetime import datetime
 from scipy.optimize import root
 from Components import Component
 from Fluids import Fluid, Mixture
@@ -584,3 +586,42 @@ class System:
                         print(f"[!] Failed to parse value for {label}.")
 
         print(f"[✓] Loaded node inputs from: {os.path.abspath(filename)}")
+
+
+    def export(self, filepath=None):
+        # Auto-generate filename if not provided
+        if filepath is None:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            base = f"{self.name}_Results_{timestamp}"
+            filepath = base + ".xlsx"
+            counter = 1
+            while os.path.exists(filepath):
+                filepath = f"{base}_{counter}.xlsx"
+                counter += 1
+
+        writer = pd.ExcelWriter(filepath, engine="openpyxl")
+        sensor_rows = []
+
+        # First: collect sensors
+        for comp in self.components:
+            if comp.__class__.__name__.lower() == "sensor":
+                df = getattr(comp, "get_results_dataframe", lambda: None)()
+                if df is not None and not df.empty:
+                    sensor_rows.append(df)
+
+        if sensor_rows:
+            sensor_df = pd.concat(sensor_rows, ignore_index=True)
+            sensor_df.to_excel(writer, sheet_name="Sensors", index=False)
+
+        # Then write other components
+        for comp in self.components:
+            if comp.__class__.__name__.lower() == "sensor":
+                continue  # already handled
+            df = getattr(comp, "get_results_dataframe", lambda: None)()
+            if df is None or df.empty:
+                continue
+            sheet_name = comp.name.replace("_", " ").title()[:31]
+            df.to_excel(writer, sheet_name=sheet_name, index=False)
+
+        writer.close()
+        print(f"[✓] Results exported to: {os.path.abspath(filepath)}")
