@@ -1,6 +1,7 @@
 from CoolProp.CoolProp import PropsSI
 import CoolProp
 from .BaseFluid import BaseFluid
+from scipy.optimize import root_scalar
 
 
 class Fluid(BaseFluid):
@@ -260,3 +261,35 @@ class Fluid(BaseFluid):
         self._set_inputs(T, P, X)
         self._update_state()
 
+
+    @classmethod
+    def get_temperature_from_Ph(cls, name: str, P: float, target_h: float):
+        """
+        Returns a Fluid instance initialized using pressure and enthalpy (P, H).
+        Solves for T that gives the desired enthalpy.
+        """
+        dummy = cls(name, T=300, P=P)  # temp init to access limits
+
+        Tmin = dummy.min_temperature + 1.0
+        Tmax = dummy.max_temperature - 1.0
+
+        def residual(T):
+            try:
+                f = cls(name, T=T, P=P)
+                return f.enthalpy - target_h
+            except Exception:
+                return float("nan")
+
+        r1 = residual(Tmin)
+        r2 = residual(Tmax)
+        if r1 * r2 > 0:
+            raise ValueError(
+                f"Target enthalpy {target_h:.2f} J/kg is outside the achievable range at {P:.2f} Pa.\n"
+                f"Approx. enthalpy range: [{r1 + target_h:.2f}, {r2 + target_h:.2f}]"
+            )
+
+        sol = root_scalar(residual, bracket=[Tmin, Tmax], method="brentq")
+        if not sol.converged:
+            raise RuntimeError("Failed to converge to solution for T given P and h.")
+
+        return sol.root
