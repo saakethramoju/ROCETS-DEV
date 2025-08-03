@@ -20,6 +20,7 @@ class FlowPort(ABC):
         self._node: Optional[FlowNode] = None
         self._connected_port: Optional["FlowPort"] = None
         self._m_dot: Optional[float] = None
+        self._e_dot: Optional[float] = None
 
     @property
     def fluid(self) -> Optional[BaseFluid]:
@@ -76,6 +77,14 @@ class FlowPort(ABC):
         self._m_dot = value
 
     @property
+    def energy_flow(self) -> Optional[float]:
+        return self._e_dot
+
+    @energy_flow.setter
+    def energy_flow(self, value: Optional[float]) -> None:
+        self._e_dot = value
+
+    @property
     def connected_port(self) -> Optional["FlowPort"]:
         return self._connected_port
 
@@ -104,7 +113,7 @@ class FlowPort(ABC):
 
     def __repr__(self) -> str:
         role = self.__class__.__name__
-        return f"<{role} {self.name} | fluid={self.fluid_name}, T={self.T}, P={self.P}, X={self.X}, m_dot={self.mass_flow}>"
+        return f"<{role} {self.name} | fluid={self.fluid_name}, T={self.T}, P={self.P}, X={self.X}, m_dot={self.mass_flow}, e_dot={self.energy_flow}>"
 
     def __str__(self) -> str:
         role = self.__class__.__name__
@@ -118,6 +127,7 @@ class FlowPort(ABC):
             f"  P         = {self.P} Pa\n"
             f"  X         = {self.X}\n"
             f"  Mass Flow = {self.mass_flow} kg/s\n"
+            f"  Energy Flow = {self.energy_flow} W\n"
             f"  Connected to = {self._connected_port.name if self._connected_port else 'None'}\n"
             f"  Node         = {self._node.name if self._node else 'None'}"
         )
@@ -198,6 +208,14 @@ class InFlow(FlowPort):
         other.fluid = shared_fluid
         node.register_ports(self, other)
 
+        # ✅ System detection
+        parent_systems = [
+            p.parent.system for p in (self, other)
+            if p.parent and hasattr(p.parent, "system") and p.parent.system is not None
+        ]
+        if parent_systems:
+            node.system = parent_systems[0]
+
 
 class OutFlow(FlowPort):
     def connect(self, other: FlowPort) -> None:
@@ -215,3 +233,11 @@ class OutFlow(FlowPort):
         self.fluid = shared_fluid
         other.fluid = shared_fluid
         node.register_ports(self, other)
+
+        # ✅ System detection
+        parent_systems = [
+            p.parent.system for p in (self, other)
+            if p.parent and hasattr(p.parent, "system") and p.parent.system is not None
+        ]
+        if parent_systems:
+            node.system = parent_systems[0]

@@ -1,65 +1,66 @@
 import numpy as np
-from scipy.optimize import root
-from Fluids import Fluid  # Adjust import to match your folder structure
+from scipy.optimize import root_scalar
+from Fluids import Fluid  # Your Fluid class
+import matplotlib.pyplot as plt
 
 # Constants
-fluid_name = "Water"
-P = 101325  # Pa
-T0 = 300    # K
-m = 1.0     # kg
-Q_dot = 1000.0  # W (J/s) - constant heat input
-dt = 0.5    # time step in seconds
-n_steps = 20
+dt = 0.1
+t_end = 3
+T = 298.15
+V = 1.0  # m³
+step = 0
 
-# Store time history
-times = [0.0]
-temperatures = [T0]
-enthalpies = [Fluid(fluid_name, T=T0, P=P).enthalpy]
+P1 = 3e5      # inlet pressure
+P2 = 101325   # outlet pressure
+Cd = 0.8
+A = 0.8e-5    # m²
 
-T_prev = T0
-h_prev = enthalpies[-1]
+# Initial condition
+P_guess = 101325.0
+f = Fluid(T=T, P=P_guess)
+rho = f.density
+M = rho * V
 
-for step in range(1, n_steps + 1):
-    time = step * dt
+# Data storage
+t_vals = [0]
+P_vals = [P_guess]
+M_vals = [M]
 
-    def residual(T_next):
-        try:
-            fluid_next = Fluid(fluid_name, T=T_next, P=P)
-            h_next = fluid_next.enthalpy
-            dU = m * (h_next - h_prev)
-            return dU - Q_dot * dt  # backward Euler: U[n+1] - U[n] = Q·dt
-        except Exception:
-            return 1e9  # large residual if T causes CoolProp failure
+def mdot(P_up, P_down, rho, Cd, A):
+    if P_up <= P_down:
+        return 0.0
+    return Cd * A * np.sqrt(2 * rho * (P_up - P_down))
 
-    sol = root(lambda x: residual(x[0]), [T_prev])
+# Time stepping
+while t_vals[-1] < t_end + dt:
+    M_prev = M  # known mass at tⁿ
 
-    if not sol.success:
-        print(f"[✗] Step {step} failed: {sol.message}")
-        break
+    def residual(P):
+        f = Fluid(T=T, P=P)
+        rho = f.density
+        m_in = mdot(P1, P, rho, Cd, A)
+        m_out = mdot(P, P2, rho, Cd, A)
+        if step == 0:
+            return m_out
+        M_est = rho * V
+        return M_est - M_prev - dt * (m_in - m_out)
 
-    T_next = sol.x[0]
-    fluid_next = Fluid(fluid_name, T=T_next, P=P)
-    h_next = fluid_next.enthalpy
+    sol = root_scalar(residual, bracket=[1e4, 5e5], method='brentq')
+    if not sol.converged:
+        raise RuntimeError(f"Root solve failed at t = {t_vals[-1]}s")
 
-    # Store results
-    times.append(time)
-    temperatures.append(T_next)
-    enthalpies.append(h_next)
+    P_next = sol.root
+    f = Fluid(T=T, P=P_next)
+    rho = f.density
+    M = rho * V
 
-    # Prepare for next step
-    T_prev = T_next
-    h_prev = h_next
+    m_in = mdot(P1, P_next, rho, Cd, A)
+    m_out = mdot(P_next, P2, rho, Cd, A)
 
-    print(f"[✓] t = {time:.2f}s | T = {T_next:.2f} K | h = {h_next:.2f} J/kg")
+    print(f"t = {t_vals[-1]:.1f} s | P = {P_next:.2f} Pa | M = {M:.4f} kg, mdot1 = {m_in:.2f}, mdot2 = {m_out:.2f}")
 
-# Optional: plot
-try:
-    import matplotlib.pyplot as plt
-    plt.plot(times, temperatures, marker="o")
-    plt.xlabel("Time [s]")
-    plt.ylabel("Temperature [K]")
-    plt.title("Transient Fluid Heating (Backward Euler)")
-    plt.grid(True)
-    plt.show()
-except ImportError:
-    print("Install matplotlib to visualize results.")
+    # Save data
+    t_vals.append(t_vals[-1] + dt)
+    P_vals.append(P_next)
+    M_vals.append(M)
+    step += 1

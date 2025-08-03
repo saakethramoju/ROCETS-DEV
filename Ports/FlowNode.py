@@ -4,7 +4,7 @@ from Fluids import BaseFluid, Mixture
 
 if TYPE_CHECKING:
     from .FlowPort import FlowPort
-
+    from System import System
 
 class FlowNode:
     """
@@ -19,6 +19,18 @@ class FlowNode:
 
         self._ports: List[FlowPort] = []
         self._fluid: Optional[BaseFluid] = self._resolve_fluid(fluid_a, fluid_b)
+        self._system: Optional["System"] = None
+
+        # Transient storage state
+        self.V: float = 1.0  # default volume [m^3], should be configurable per case
+        self.M: float = 0.0  # total mass in node [kg]
+        self.U: float = 0.0  # total internal energy [J]
+
+        # Store previous state for time-stepping
+        self.M_prev: float = 0.0
+        self.U_prev: float = 0.0
+
+
 
     def is_boundary_node(self) -> bool:
         """
@@ -105,6 +117,19 @@ class FlowNode:
         if port.fluid:
             self.fluid = port.fluid
 
+    @property
+    def system(self):
+        return self._system
+
+    @system.setter
+    def system(self, sys):
+        if self._system is sys:
+            return
+        self._system = sys
+        if hasattr(sys, "nodes") and self not in sys.nodes:
+            sys.nodes.append(self) 
+
+
     # -------- Mass flow helpers --------
 
     @property
@@ -124,6 +149,25 @@ class FlowNode:
             if p.__class__.__name__ == role:
                 return p.mass_flow
         return None
+
+    @property
+    def port_energy_flows(self) -> List[Optional[float]]:
+        return [p.energy_flow for p in self._ports]
+        
+    @property
+    def inlet_energy_flow(self) -> Optional[float]:
+        return self._get_port_energy_flow("InFlow")
+
+    @property
+    def outlet_energy_flow(self) -> Optional[float]:
+        return self._get_port_energy_flow("OutFlow")
+
+    def _get_port_energy_flow(self, role: str) -> Optional[float]:
+        for p in self._ports:
+            if p.__class__.__name__ == role:
+                return p.energy_flow
+        return None
+
 
     # -------- Repr / Str --------
 
@@ -180,79 +224,63 @@ class FlowNode:
             steady-state: m_dot_out - m_dot_in
             transient: not yet implemented
         """
+        if len(self._ports) != 2:
+            return None  # ill-formed node
+        
+
+        a, b = self._ports
+
+        if a.mass_flow is None or b.mass_flow is None:
+            return None
+
+        if a.__class__.__name__ == "InFlow":
+            m_out, m_in = a.mass_flow, b.mass_flow
+        elif b.__class__.__name__ == "InFlow":
+            m_out, m_in = b.mass_flow, a.mass_flow
+        else:
+            return None  # malformed node (shouldn’t happen)
+        
+
         if analysis_type == "steady-state":
-            if len(self._ports) != 2:
-                return None  # ill-formed node
-
-            a, b = self._ports
-
-            if a.mass_flow is None or b.mass_flow is None:
-                return None
-
-            if a.__class__.__name__ == "InFlow":
-                m_out, m_in = a.mass_flow, b.mass_flow
-            elif b.__class__.__name__ == "InFlow":
-                m_out, m_in = b.mass_flow, a.mass_flow
-            else:
-                return None  # malformed node (shouldn’t happen)
-
             return m_out - m_in
 
+
         elif analysis_type == "transient":
-            return None  # not implemented
+            dMdt = (self.M - self.M_prev) / self.system.dt
+            return m_out + dMdt - m_in
 
         return None  # invalid analysis type
     
 
-
     def energy_residual(self, analysis_type: str = "steady-state") -> Optional[float]:
         """
         Compute energy conservation residual:
-            steady-state: m_out*(h_out + ½v_out²) - m_in*(h_in + ½v_in²)
-            transient: not yet implemented
+            steady-state: e_out - e_in
         """
+        if len(self._ports) != 2:
+            return None  # ill-formed node
+
+        a, b = self._ports
+
+        if a.energy_flow is None or b.energy_flow is None:
+            return None
+
+        if a.__class__.__name__ == "InFlow":
+            e_out, e_in = a.energy_flow, b.energy_flow
+        elif b.__class__.__name__ == "InFlow":
+            e_out, e_in = b.energy_flow, a.energy_flow
+        else:   
+            return None  # malformed node
+        
+        
         if analysis_type == "steady-state":
-            if len(self._ports) != 2:
-                return None  # ill-formed node
-
-            a, b = self._ports
-
-            if a.mass_flow is None or b.mass_flow is None:
-                return None
-            if a.fluid is None or b.fluid is None:
-                return None
-
-            if a.__class__.__name__ == "InFlow":
-                out_port, in_port = a, b
-            elif b.__class__.__name__ == "InFlow":
-                out_port, in_port = b, a
-            else:
-                return None  # malformed node
-
-            try:
-                m_in = in_port.mass_flow
-                m_out = out_port.mass_flow
-
-                rho_in = in_port.fluid.density
-                rho_out = out_port.fluid.density
-
-                v_in = m_in / rho_in # assume A = 1
-                v_out = m_out / rho_out
-
-
-                h_in = in_port.fluid.enthalpy
-                h_out = out_port.fluid.enthalpy
-
-
-                return m_out * (h_out + 0.5 * v_out**2) - m_in * (h_in + 0.5 * v_in**2)
-
-            except (AttributeError, ZeroDivisionError):
-                return None
+            return e_out - e_in
 
         elif analysis_type == "transient":
-            return None  # not implemented
+            dUdt = (self.U - self.U_prev) / self.system.dt
+            return e_out + dUdt - e_in
 
-        return None  # invalid analysis type
+        return None
 
 
 
@@ -273,3 +301,34 @@ class FlowNode:
             
 
         return residuals
+
+
+
+    def timestep(self):
+        """
+        Update node's mass and energy storage based on inflow/outflow over dt.
+        Only applies to non-boundary nodes.
+        """
+        if self.is_boundary_node():
+            return  # Skip storage update for boundaries
+
+        # Validate mass flow
+        if self.inlet_mass_flow is None or self.outlet_mass_flow is None:
+            raise RuntimeError(f"{self.name}: Missing mass flow rate.")
+
+        if self.inlet_energy_flow is None or self.outlet_energy_flow is None:
+            raise RuntimeError(f"{self.name}: Missing energy flow rate.")
+
+        # Save previous state
+        self.M_prev = self.M
+        self.U_prev = self.U
+
+        # Update storage using conservation equations
+        dm = self.inlet_mass_flow - self.outlet_mass_flow
+        dU = self.inlet_energy_flow - self.outlet_energy_flow
+
+        self.M += dm * self.system.dt
+        self.U += dU * self.system.dt
+
+        print(self.M, self.M_prev)
+

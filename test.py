@@ -79,7 +79,7 @@ vespula.load_configuration("Vespula_Configuration.yaml")
 vespula.load_inputs("Vespula_Inputs.yaml")
 #vespula.load_inputs("Vespula_Inputs_1.yaml")
 #vespula.evaluate(True)
-vespula.solve(verbose=True)
+vespula.solve('transient', dt=1, t_end=3, verbose=True)
 
 
 print(inlet)
@@ -89,6 +89,11 @@ print(outlet)
 print(flow_meter1)
 print(flow_meter2)
 
-vespula.export()
+#print(vespula.get_state_vector())
+#print(vespula.get_residual_vector())
+#print(vespula.nodes)
+
+
+#vespula.export()
 
 

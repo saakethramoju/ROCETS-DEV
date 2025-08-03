@@ -2,6 +2,7 @@
 import os
 import yaml
 import pandas as pd
+import numpy as np
 from datetime import datetime
 from scipy.optimize import root
 from Components import Component
@@ -13,44 +14,95 @@ class System:
     def __init__(self, name: str):
         self.name = name
         self.components: list[Component] = []
+        self.nodes: list[FlowNode] = []
+        self.t = np.array([0]) # time array
+        self.dt = None # time step
+        self.step = 0 # step number
+        self.t_end = 0 # end time
 
-
-    def solve(self, analysis_type: str = "steady-state", method: str = "hybr", tol: float = 1e-6, verbose = False):
+    def solve(self, analysis_type: str = "steady-state", method: str = "hybr", tol: float = 1e-6, verbose=False, dt=None, t_end=None):
         """
-        Solves the system by finding the state vector (e.g. T, P at each node) that drives residuals to zero.
-        
+        Solves the system using either steady-state or transient analysis.
+
         Parameters:
-            analysis_type: e.g. 'steady-state' or 'transient'
-            method: scipy root-solving method (e.g., 'hybr', 'lm', 'broyden1', etc.)
-            tol: solver tolerance
+            analysis_type: 'steady-state' or 'transient'
+            method: root solver method for steady-state or transient solves
+            tol: numerical solver tolerance
+            verbose: whether to print iteration status
 
         Raises:
-            RuntimeError if solution fails.
+            RuntimeError if a step fails to converge.
         """
-        self.evaluate(verbose=False)
-        if len(self.get_state_vector()) < len( self.get_residual_vector(analysis_type=analysis_type)):
-            method = 'lm'
-
-        #print(self.get_state_vector())
-        #print(self.get_residual_vector(analysis_type=analysis_type))
 
 
-        def residual_func(x):
-            self.set_state_vector(x)
+        if analysis_type == "steady-state":
             self.evaluate(verbose=False)
-            #print(self.get_state_vector())
-            #print(self.get_residual_vector(analysis_type=analysis_type))
-            return self.get_residual_vector(analysis_type=analysis_type)
 
-        x0 = self.get_state_vector()
-        result = root(residual_func, x0, method=method, tol=tol)
+            if len(self.get_state_vector()) < len(self.get_residual_vector(analysis_type=analysis_type)):
+                method = 'lm'
 
-        if result.success:
-            self.set_state_vector(result.x)
-            if verbose:
-                print(f"[✓] Converged in {result.nfev} evaluations.")
-        else:
-            raise RuntimeError(f"[✗] Solver failed: {result.message}")
+            def residual_func(x):
+                self.set_state_vector(x)
+                self.evaluate(verbose=False)
+                return self.get_residual_vector(analysis_type=analysis_type)
+
+            x0 = self.get_state_vector()
+            result = root(residual_func, x0, method=method, tol=tol)
+
+            if result.success:
+                self.set_state_vector(result.x)
+                if verbose:
+                    print(f"[✓] Converged in {result.nfev} evaluations.")
+            else:
+                raise RuntimeError(f"[✗] Solver failed: {result.message}")
+
+        elif analysis_type == "transient":
+            if dt is not None:
+                self.dt = dt
+            if t_end is not None:
+                self.t_end = t_end
+
+            if self.dt is None or self.t_end is None:
+                raise ValueError("Both dt and t_end must be set for transient solving.")
+
+            while self.t[-1] < self.t_end:
+                print(f"\n[⏱] Time Step {self.step} — t = {self.t[-1]:.3f} s")
+                # Call root solver for this timestep
+                def residual_func(x):
+                    self.set_state_vector(x)
+                    self.evaluate(verbose=False)
+                    return self.get_residual_vector(analysis_type="transient")
+
+                x0 = self.get_state_vector()
+                result = root(residual_func, x0, method=method, tol=tol)
+
+                if result.success:
+                    self.set_state_vector(result.x)
+                    if verbose:
+                        print(f"[✓] Converged in {result.nfev} evaluations.")
+                else:
+                    raise RuntimeError(f"[✗] Solver failed: {result.message}")
+
+                # Advance time AFTER solving this timestep
+                self.timestep()
+
+
+    def timestep(self):
+        """
+        Perform one transient time step:
+        - Solve for system state (T/P) with transient residuals.
+        - Advance node storage (M, U).
+        - Advance system time.
+        """
+
+        self.step += 1
+        self.t = np.append(self.t, self.t[-1] + self.dt)
+        for node in self.nodes:
+            node.timestep()
+        for comp in self.components:
+            if hasattr(comp, "record"):
+                comp.record()
+
 
 
 
@@ -198,9 +250,9 @@ class System:
                     tgt = out_port.connected_port
                     connections.append(f"{comp.name}.{out_port.name} → {tgt.parent.name}.{tgt.name}")
             for out_prop in comp.property_outs.values():
-                if out_prop.connected_port:
-                    tgt = out_prop.connected_port
+                for tgt in out_prop.connected_ports:
                     connections.append(f"{comp.name}.{out_prop.name} ⇢ {tgt.parent.name}.{tgt.name}")
+
 
         conn_summary = "Connections:\n" + ("\n".join(connections) if connections else "(none)")
 
@@ -589,7 +641,9 @@ class System:
 
 
     def export(self, filepath=None):
-        # Auto-generate filename if not provided
+
+
+        # Default file path
         if filepath is None:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             base = f"{self.name}_Results_{timestamp}"
@@ -600,28 +654,38 @@ class System:
                 counter += 1
 
         writer = pd.ExcelWriter(filepath, engine="openpyxl")
+
+        # Detect transient run (more than one time step)
+        is_transient = hasattr(self, "t") and hasattr(self.t, "__len__") and len(self.t) > 1
+
         sensor_rows = []
 
-        # First: collect sensors
         for comp in self.components:
+            name = comp.name.replace("_", " ").title()[:31]
+
+            # Handle sensors separately
             if comp.__class__.__name__.lower() == "sensor":
-                df = getattr(comp, "get_results_dataframe", lambda: None)()
+                df = getattr(comp, "get_steady_state_dataframe", lambda: None)()
                 if df is not None and not df.empty:
                     sensor_rows.append(df)
+                continue
 
+            # Choose appropriate result method
+            if is_transient:
+                df = getattr(comp, "get_transient_dataframe", lambda: None)()
+            else:
+                df = getattr(comp, "get_steady_state_dataframe", lambda: None)()
+
+            if df is not None and not df.empty:
+                df = df.copy()
+                df.insert(0, "Component", comp.name)
+                sheet_name = name
+                df.to_excel(writer, sheet_name=sheet_name, index=False)
+
+        # Combine all sensors into one sheet
         if sensor_rows:
             sensor_df = pd.concat(sensor_rows, ignore_index=True)
             sensor_df.to_excel(writer, sheet_name="Sensors", index=False)
-
-        # Then write other components
-        for comp in self.components:
-            if comp.__class__.__name__.lower() == "sensor":
-                continue  # already handled
-            df = getattr(comp, "get_results_dataframe", lambda: None)()
-            if df is None or df.empty:
-                continue
-            sheet_name = comp.name.replace("_", " ").title()[:31]
-            df.to_excel(writer, sheet_name=sheet_name, index=False)
 
         writer.close()
         print(f"[✓] Results exported to: {os.path.abspath(filepath)}")

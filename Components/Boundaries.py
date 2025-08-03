@@ -19,10 +19,12 @@ class Inlet(Component):
             f"  T [K]: {p.T if p.T is not None else '-'}\n"
             f"  P [Pa]: {p.P if p.P is not None else '-'}\n"
             f"  X: {p.X if p.X is not None else '-'}\n"
-            f"  Mass Flow [kg/s]: {p.mass_flow if p.mass_flow is not None else '-'}"
+            f"  Mass Flow [kg/s]: {p.mass_flow if p.mass_flow is not None else '-'}\n"
+            f"  Energy Flow [W]: {p.energy_flow if p.energy_flow is not None else '-'}"
         )
+        
     
-    def get_results_dataframe(self):
+    def get_steady_state_dataframe(self):
         p = self.outflow
         if not p:
             return None
@@ -33,7 +35,29 @@ class Inlet(Component):
             "P [Pa]": p.P,
             "X": p.X,
             "Mass Flow [kg/s]": p.mass_flow,
+            "Energy Flow [W]": p.energy_flow,
         }])
+    
+    
+    def record(self):
+        if not self.system or not hasattr(self.system, "t"):
+            return
+
+        t = self.system.t[self.system.step]
+        p = self.outflow if hasattr(self, "outflow") else self.inflow
+
+        row = {
+            "Time [s]": t,
+            "Fluid": str(p.fluid_name) if p.fluid else "-",
+            "T [K]": p.T,
+            "P [Pa]": p.P,
+            "X": p.X,
+            "Mass Flow [kg/s]": p.mass_flow,
+            "Energy Flow [W]": p.energy_flow,
+        }
+
+        self._record_df = pd.concat([self._record_df, pd.DataFrame([row])], ignore_index=True)
+
 
 
 class Outlet(Component):
@@ -46,18 +70,19 @@ class Outlet(Component):
     def __str__(self):
         p = self.inflow  # ✅ fixed (was incorrectly using self.outflow)
         return (
-            f"[Outlet: {self.name}]\n"
+            f"[Inlet: {self.name}]\n"
             f"  Port: {p.name}\n"
             f"  Connected To: {p.connected_port.name if p.connected_port else '-'}\n"
             f"  Fluid: {p.fluid_name if p.fluid else '-'}\n"
             f"  T [K]: {p.T if p.T is not None else '-'}\n"
             f"  P [Pa]: {p.P if p.P is not None else '-'}\n"
             f"  X: {p.X if p.X is not None else '-'}\n"
-            f"  Mass Flow [kg/s]: {p.mass_flow if p.mass_flow is not None else '-'}"
+            f"  Mass Flow [kg/s]: {p.mass_flow if p.mass_flow is not None else '-'}\n"
+            f"  Energy Flow [W]: {p.energy_flow if p.energy_flow is not None else '-'}"
         )
     
     
-    def get_results_dataframe(self):
+    def get_steady_state_dataframe(self):
         p = self.inflow
         if not p:
             return None
@@ -68,7 +93,29 @@ class Outlet(Component):
             "P [Pa]": p.P,
             "X": p.X,
             "Mass Flow [kg/s]": p.mass_flow,
+            "Energy Flow [W]": p.energy_flow,
         }])
+        
+
+    def record(self):
+        if not self.system or not hasattr(self.system, "t"):
+            return
+
+        t = self.system.t[self.system.step]
+        p = self.outflow if hasattr(self, "outflow") else self.inflow
+
+        row = {
+            "Time [s]": t,
+            "Fluid": str(p.fluid_name) if p.fluid else "-",
+            "T [K]": p.T,
+            "P [Pa]": p.P,
+            "X": p.X,
+            "Mass Flow [kg/s]": p.mass_flow,
+            "Energy Flow [W]": p.energy_flow,
+        }
+
+        self._record_df = pd.concat([self._record_df, pd.DataFrame([row])], ignore_index=True)
+
 
 
 

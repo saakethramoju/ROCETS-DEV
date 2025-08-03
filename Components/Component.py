@@ -23,6 +23,8 @@ class Component:
         self.configuration = {}
         self._residuals = []
 
+        self._record_df = pd.DataFrame()
+
         for key in self.configuration_keys:
             self.configuration[key] = None
 
@@ -123,7 +125,8 @@ class Component:
         inflow_table = PrettyTable()
         outflow_table = PrettyTable()
         inflow_table.field_names = outflow_table.field_names = [
-            "Port", "Connected To", "Fluid", "Phase", "T [K]", "P [Pa]", "X", "Mass Flow [kg/s]"
+            "Port", "Connected To", "Fluid", "Phase", "T [K]", "P [Pa]", "X",
+            "Mass Flow [kg/s]", "Energy Flow [W]"
         ]
 
         for port_name, port in self.inflows.items():
@@ -137,7 +140,8 @@ class Component:
                 port.T if port.T is not None else "-",
                 port.P if port.P is not None else "-",
                 port.X if port.X is not None else "-",
-                port.mass_flow if port.mass_flow is not None else "-"
+                port.mass_flow if port.mass_flow is not None else "-",
+                port.energy_flow if port.energy_flow is not None else "-"
             ])
 
         for port_name, port in self.outflows.items():
@@ -151,7 +155,8 @@ class Component:
                 port.T if port.T is not None else "-",
                 port.P if port.P is not None else "-",
                 port.X if port.X is not None else "-",
-                port.mass_flow if port.mass_flow is not None else "-"
+                port.mass_flow if port.mass_flow is not None else "-",
+                port.energy_flow if port.energy_flow is not None else "-"
             ])
 
         # ----- Property Ports -----
@@ -382,6 +387,24 @@ class Component:
 
         print()  # trailing newline for clarity
 
-    def get_results_dataframe(self) -> Optional[pd.DataFrame]:
+    def record(self):
+        """Override in subclass. Appends a row of time-stamped data to _record_df."""
+        if not self.system or not hasattr(self.system, "t") or not hasattr(self.system, "step"):
+            return  # Safety fallback
+
+        t = self.system.t[self.system.step]
+
+        row = {
+            "Time [s]": t,
+            # Additional fields added by subclasses
+        }
+
+        self._record_df = pd.concat([self._record_df, pd.DataFrame([row])], ignore_index=True)
+
+    def get_transient_dataframe(self) -> pd.DataFrame:
+        """Return full time history for this component."""
+        return self._record_df
+
+    def get_steady_state_dataframe(self) -> Optional[pd.DataFrame]:
         ...
 

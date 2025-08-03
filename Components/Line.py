@@ -54,7 +54,7 @@ class IncompressibleLine(Component):
     def evaluate(self):
         """
         Selects the appropriate flow-solving method based on available boundary conditions.
-        Also propagates mass flow to connected fluid-state boundaries.
+        Also propagates mass and energy flow to connected fluid-state boundaries.
         """
         source = self["Source"]
         drain = self["Drain"]
@@ -74,15 +74,20 @@ class IncompressibleLine(Component):
         else:
             result = self.pipe1()
 
-        # Propagate mass flow to FluidState boundaries if connected
-        if source.is_boundary(FluidStateInlet, Inlet) and source.connected_port:
+        # Propagate mass and energy flow to Inlets/Outlets (if connected)
+        if source.connected_port:
             source.connected_port.mass_flow = source.mass_flow
-        if drain.is_boundary(FluidStateOutlet, Outlet) and drain.connected_port:
-            drain.connected_port.mass_flow = drain.mass_flow
+            source.connected_port.energy_flow = source.energy_flow
 
+        if drain.connected_port:
+            drain.connected_port.mass_flow = drain.mass_flow
+            drain.connected_port.energy_flow = drain.energy_flow
+
+        # Also assign to the component-level property if needed
         self["Mass Flow (kg/s)"] = result
 
         return result
+
 
     def _align_fluids(self):
         """
@@ -115,8 +120,15 @@ class IncompressibleLine(Component):
         dP = f1.P - f2.P
 
         mdot = np.sign(dP) * Cd * A * np.sqrt(2 * rho * abs(dP))
+        
+        v1 = mdot / (f1.density * Cd * A)
+        edot = mdot * (f1.enthalpy + 0.5*(v1**2))
 
-        source.mass_flow = drain.mass_flow = mdot
+        source.mass_flow = mdot
+        drain.mass_flow = mdot
+
+        source.energy_flow = edot
+        drain.energy_flow = edot
         return mdot
 
     def pipe2(self):
@@ -190,7 +202,29 @@ class IncompressibleLine(Component):
         return mdot
     
 
-    def get_results_dataframe(self):
+    def record(self):
+        if not self.system or not hasattr(self.system, "t"):
+            return
+
+        t = self.system.t[self.system.step]
+        source = self["Source"]
+        drain = self["Drain"]
+
+        row = {
+            "Time [s]": t,
+            "Source T [K]": source.T,
+            "Source P [Pa]": source.P,
+            "Drain T [K]": drain.T,
+            "Drain P [Pa]": drain.P,
+            "Mass Flow [kg/s]": source.mass_flow,
+            "Source Density [kg/m3]": source.fluid.density if source.fluid else None,
+            "Drain Density [kg/m3]": drain.fluid.density if drain.fluid else None,
+        }
+
+        self._record_df = pd.concat([self._record_df, pd.DataFrame([row])], ignore_index=True)
+    
+
+    def get_steady_state_dataframe(self):
         data = []
         for port_name, port in self.ports().items():
             if port.node:
@@ -205,4 +239,6 @@ class IncompressibleLine(Component):
                 }
                 data.append(row)
         return pd.DataFrame(data)
+    
+
 

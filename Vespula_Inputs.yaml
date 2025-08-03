@@ -3,7 +3,7 @@
 
 Inlet: # Input
   Node 1:
-    Fluid:
+    Fluid: Water
     Temperature (K): 300
     Pressure (Pa): 2e6
     # Specify binary mixture below if needed
@@ -20,4 +20,4 @@ Runline1:
 Outlet: # Input
   Node 2:
     Temperature (K): 300
-    Pressure (Pa): 1e6
+    Pressure (Pa): 101325
