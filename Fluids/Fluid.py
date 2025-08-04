@@ -115,6 +115,9 @@ class Fluid(BaseFluid):
 
     # --- Thermodynamic Properties ---
     @property
+    def internal_energy(self): return self._prop("U")
+
+    @property
     def density(self): return self._prop("D")
 
     @property
@@ -226,6 +229,7 @@ class Fluid(BaseFluid):
         add_line("Quality:", self.X)
         add_line("Density [kg/m³]:", self.density)
         add_line("Enthalpy [J/kg]:", self.enthalpy)
+        add_line("Internal Energy [J/kg]:", self.internal_energy)
         add_line("Specific Heat [J/kg·K]:", self.cp)
         add_line("Viscosity [Pa·s]:", self.viscosity, precision=6)
         add_line("Thermal Conductivity [W/m·K]:", self.thermal_conductivity, precision=6)
