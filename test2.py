@@ -1,136 +1,157 @@
 import numpy as np
-from scipy.optimize import root_scalar
-from Fluids import Fluid  # Your Fluid class
+from scipy.optimize import root
+from scipy.integrate import solve_ivp
 import matplotlib.pyplot as plt
+import cantera as ct
 
-# Constants
-dt = 0.1
-t_end = 3
-T = 298.15
-V = 1.0  # m³
-step = 0
-
-P1 = 3e5      # inlet pressure
-P2 = 101325   # outlet pressure
+# --- Simulation settings ---
+V = 1e-1  # control volume [m³]
 Cd = 0.8
-A = 0.8e-3    # m²
+A = 0.8e-5  # flow area [m²]
+t_end = 10
 
-# Initial condition
-P_guess = 101325.0
-f = Fluid(T=T, P=P_guess)
-rho = f.density
-M = rho * V
+# --- Boundary conditions ---
+P1 = 2e5     # inlet pressure [Pa]
+h1 = -15865755.52454401
+P2 = 101325  # outlet pressure [Pa]
+h2 = -15865846.944355397
 
-# Data storage
-t_vals = [0]
-P_vals = [P_guess]
-M_vals = [M]
-mdot_in_vals = []
-mdot_out_vals = []
+# --- Create inlet/outlet fluid states ---
+w1 = ct.Water(); w1.HP = h1, P1
+w2 = ct.Water(); w2.HP = h2, P2
+rho_in = w1.density_mass
+rho_out = w2.density_mass
+h_in = w1.enthalpy_mass
 
+# --- Flow functions ---
 def mdot(P_up, P_down, rho, Cd, A):
-    if P_up <= P_down:
-        return 0.0
-    return Cd * A * np.sqrt(2 * rho * (P_up - P_down))
+    return Cd * A * np.sqrt(2 * rho * max(P_up - P_down, 0))
 
-# Time stepping
-while t_vals[-1] < t_end + dt:
+def edot(mdot, h):
+    return mdot * h
 
+# --- STEP 1: Solve initial state where mdot_out = 0 and edot_out = 0 ---
+def initial_residual(x):
+    P, h = x
+    try:
+        w = ct.Water()
+        w.HP = h, P
+        rho = w.density_mass
+        h_local = w.enthalpy_mass
+        m_out = mdot(P, P2, 0.5 * (rho + rho_out), Cd, A)
+        e_out = edot(m_out, h_local)
+        return [m_out, e_out]
+    except Exception:
+        return [1e9, 1e9]
 
-    M_prev = M  # known mass at tⁿ
+sol_init = root(initial_residual, [P2, h2], method="lm")
+if not sol_init.success:
+    raise RuntimeError("Initial state solver failed.")
 
-    def residual(P):
-        f = Fluid(T=T, P=P)
-        rho = f.density
-        m_in = mdot(P1, P, rho, Cd, A)
-        m_out = mdot(P, P2, rho, Cd, A)
-        M_est = rho * V
-        return M_est - M_prev - dt * (m_in - m_out)
+P0, h0 = sol_init.x
 
-    sol = root_scalar(residual, bracket=[1e4, 5e5], method='brentq')
-    if not sol.converged:
-        raise RuntimeError(f"Root solve failed at t = {t_vals[-1]}s")
+# Compute initial mass and energy
+w = ct.Water(); w.HP = h0, P0
+rho0 = w.density_mass
+u0 = w.int_energy_mass
+M0 = rho0 * V
+U0 = rho0 * u0 * V
 
-    P_next = sol.root
-    f = Fluid(T=T, P=P_next)
-    rho = f.density
-    M = rho * V
-    print(f.internal_energy)
+# --- Global variables to store last good P and h ---
+P_last, h_last = P0, h0
 
-    m_in = mdot(P1, P_next, rho, Cd, A)
-    m_out = mdot(P_next, P2, rho, Cd, A)
+# Containers for mass flow rates
+m_in_vals, m_out_vals, time_vals = [], [], []
 
-    print(f"t = {t_vals[-1]:.1f} s | P = {P_next:.2f} Pa | M = {M:.4f} kg, mdot1 = {m_in:.2f}, mdot2 = {m_out:.2f}")
+# --- STEP 2: Define ODEs for dM/dt and dU/dt ---
+def rhs(t, Y):
+    global P_last, h_last
+    M, U = Y
 
-    # Save data
-    mdot_in_vals.append(m_in)
-    mdot_out_vals.append(m_out)
-    t_vals.append(t_vals[-1] + dt)
-    P_vals.append(P_next)
-    M_vals.append(M)
-    step += 1
+    def invert_state(x):
+        P, h = x
+        try:
+            w = ct.Water()
+            w.HP = h, P
+            rho = w.density_mass
+            u = w.int_energy_mass
+            return [rho * V - M, rho * u * V - U]
+        except Exception:
+            return [1e9, 1e9]
 
+    sol = root(invert_state, [P_last, h_last], method='lm')
+    if not sol.success:
+        raise RuntimeError("State inversion failed during integration")
 
+    P, h = sol.x
+    P_last, h_last = P, h
 
-def get_steady_state_info(t, y, tol=0.02):
-    """
-    Estimates steady-state value and settling time.
+    w = ct.Water(); w.HP = h, P
+    rho = w.density_mass
+    h_local = w.enthalpy_mass
 
-    Parameters:
-    - t: time array
-    - y: value array (e.g., pressure or mdot)
-    - tol: tolerance band for settling (default: 2%)
+    m_in = mdot(P1, P, 0.5 * (rho_in + rho), Cd, A)
+    m_out = mdot(P, P2, 0.5 * (rho + rho_out), Cd, A)
 
-    Returns:
-    - steady_value: estimated steady-state value
-    - settling_time: time when y enters and stays within tol band
-    """
-    y = np.array(y)
-    t = np.array(t)
-    steady_value = y[-1]
-    tol_band = tol * abs(steady_value)
+    m_in_vals.append(m_in)
+    m_out_vals.append(m_out)
+    time_vals.append(t)
 
-    # Check where the signal stays within the tolerance band
-    out_of_band = np.abs(y - steady_value) > tol_band
-    if np.any(out_of_band):
-        last_out_of_band_idx = np.max(np.where(out_of_band))
-        if last_out_of_band_idx + 1 < len(t):
-            settling_time = t[last_out_of_band_idx + 1]
-        else:
-            settling_time = None  # Never settled within tolerance
+    e_in = edot(m_in, h_in)
+    e_out = edot(m_out, h_local)
+
+    dMdt = m_in - m_out
+    dUdt = e_in - e_out
+
+    return [dMdt, dUdt]
+
+# --- STEP 3: Integrate in time using solve_ivp ---
+t_eval = np.linspace(0, t_end, 300)
+sol = solve_ivp(rhs, [0, t_end], [M0, U0], method='BDF', t_eval=t_eval)
+
+# --- STEP 4: Post-process: get P, h from M, U at each step ---
+P_vals, h_vals = [], []
+
+for M, U in zip(sol.y[0], sol.y[1]):
+    def invert_state(x):
+        P, h = x
+        try:
+            w = ct.Water()
+            w.HP = h, P
+            rho = w.density_mass
+            u = w.int_energy_mass
+            return [rho * V - M, rho * u * V - U]
+        except Exception:
+            return [1e9, 1e9]
+
+    sol_i = root(invert_state, [P_last, h_last], method='lm')
+    if sol_i.success:
+        P, h = sol_i.x
+        P_last, h_last = P, h
     else:
-        settling_time = t[0]  # Already settled from the beginning
+        P, h = np.nan, np.nan
+    P_vals.append(P)
+    h_vals.append(h)
 
-    return steady_value, settling_time
+# --- STEP 5: Plotting ---
+fig, axs = plt.subplots(3, 1, figsize=(12, 9), sharex=True)
 
+axs[0].plot(sol.t, P_vals, label='Pressure [Pa]')
+axs[0].set_ylabel("Pressure [Pa]")
+axs[0].legend()
+axs[0].grid(True)
 
+axs[1].plot(sol.t, h_vals, label='Enthalpy [J/kg]')
+axs[1].set_ylabel("Enthalpy [J/kg]")
+axs[1].legend()
+axs[1].grid(True)
 
-# Remove final time step to match mdot arrays
-t_plot = t_vals[:-1]
-P_plot = P_vals[:-1]
+axs[2].plot(time_vals, m_in_vals, label='Inlet mdot [kg/s]')
+axs[2].plot(time_vals, m_out_vals, label='Outlet mdot [kg/s]')
+axs[2].set_ylabel("Mass Flow Rate [kg/s]")
+axs[2].set_xlabel("Time [s]")
+axs[2].legend()
+axs[2].grid(True)
 
-# Plotting
-fig, ax1 = plt.subplots()
-
-# Mass flow rate plot (primary y-axis)
-ax1.set_xlabel('Time [s]')
-ax1.set_ylabel('Mass Flow Rate [kg/s]')
-ax1.plot(t_plot, mdot_in_vals, label='Inlet mdot', color='tab:blue')
-ax1.plot(t_plot, mdot_out_vals, label='Outlet mdot', color='tab:orange')
-ax1.legend(loc='upper left')
-ax1.grid(True)
-
-# Pressure plot (secondary y-axis)
-ax2 = ax1.twinx()
-ax2.set_ylabel('Pressure [Pa]')
-ax2.plot(t_plot, P_plot, label='Pressure', color='tab:red', linestyle='--')
-ax2.legend(loc='upper right')
-
-plt.title('Mass Flow Rates and Pressure Over Time')
 plt.tight_layout()
-
-steady_pressure, settling_time = get_steady_state_info(t_plot, P_plot)
-print(f"Steady-state pressure: {steady_pressure:.2f} Pa")
-print(f"Settling time: {settling_time:.2f} s")
-
-#plt.show()
+plt.show()

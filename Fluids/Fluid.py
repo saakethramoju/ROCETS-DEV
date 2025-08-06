@@ -304,3 +304,41 @@ class Fluid(BaseFluid):
             raise RuntimeError("[Fluid] Failed to converge to solution for T given P and h.")
 
         return sol.root
+
+
+    @property
+    def drho_dT_P(self):
+        return PropsSI("d(D)/d(T)|P", "T", self._T, "P", self._P, self.name)
+
+    @property
+    def drho_dP_T(self):
+        return PropsSI("d(D)/d(P)|T", "T", self._T, "P", self._P, self.name)
+
+    @property
+    def du_dT_P(self):
+        return PropsSI("d(U)/d(T)|P", "T", self._T, "P", self._P, self.name)
+
+    @property
+    def du_dP_T(self):
+        return PropsSI("d(U)/d(P)|T", "T", self._T, "P", self._P, self.name)
+
+    @property
+    def dh_dT_P(self):
+        return PropsSI("d(H)/d(T)|P", "T", self._T, "P", self._P, self.name)
+
+    @property
+    def dh_dP_T(self):
+        return PropsSI("d(H)/d(P)|T", "T", self._T, "P", self._P, self.name)
+    
+    @property
+    def drho_dh_P(self):
+        drho_dT = self.drho_dT_P
+        dh_dT = self.dh_dT_P
+        return drho_dT / dh_dT if dh_dT != 0 else float("nan")
+
+    @property
+    def du_dh_P(self):
+        du_dT = self.du_dT_P
+        dh_dT = self.dh_dT_P
+        return du_dT / dh_dT if dh_dT != 0 else float("nan")
+
