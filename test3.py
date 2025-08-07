@@ -1,164 +1,218 @@
 import numpy as np
 from scipy.optimize import root
+from scipy.integrate import solve_ivp
 #from Fluids import Fluid
 import matplotlib.pyplot as plt
 import cantera as ct
 
 # Simulation settings
-dt = 0.1
-t_end = 20
+dt = 0.001
+t_end = 10
 step = 0
-V = 1e-2 # m³
 Cd = 0.8
-A = 0.8e-5  # m²
+A = 0.8e-6  # m²
+
+V = 1 # m³
 
 # Boundary conditions
-P1 = 2e5     # inlet pressure [Pa]
-h1 = -15865755.52454401
+P1 = 110000     # inlet pressure [Pa]
+T1 = 298.15
 P2 = 101325     # outlet pressure [Pa]
-h2 = -15865846.944355397
+T2 = 280
 
 w1 = ct.Water()
-w1.HP = h1, P1
+w1.TP = T1, P1
 
 w2 = ct.Water()
-w2.HP = h2, P2
+w2.TP = T2, P2
 
 rho_in = w1.density_mass
 rho_out = w2.density_mass
 h_in = w1.enthalpy_mass
+h_out = w2.enthalpy_mass
 
-# Initial guess
-P_guess = 2e5
-h_guess = -1.3e7
+# Initial values
+P0 = 101325
+T0 = 300
 
 # Initial state
 water = ct.Water()
+water.TP = T0, P0
 rho = water.density_mass
 u = water.int_energy_mass
 M = rho * V
 U = M * u
 
-# Data storage for plotting
-t_vals = []
-P_vals = []
-m_in_vals = []
-m_out_vals = []
 
-# Mass flow rate
 def mdot(P_up, P_down, rho, Cd, A):
     return Cd * A * np.sqrt(2 * rho * max(P_up - P_down, 0))
 
-# Energy flow rate
 def edot(mdot, h):
     return mdot * h
 
-t = 0.0
-while t < t_end + dt / 2:
 
+def partials(w, dP=1, dT=0.1):
+    P, T = w.P, w.T
 
-    def residual(x):
-        P, h = x
-        try:
-            # Fluid states
-            w = ct.Water()
-            w.HP = h, P
+    # Central differences for dρ/dP, dρ/dT
+    w1 = ct.Water(); w1.TP = T, P + dP
+    w2 = ct.Water(); w2.TP = T, P - dP
+    drho_dP = (w1.density_mass - w2.density_mass) / (2 * dP)
+    du_dP = (w1.int_energy_mass - w2.int_energy_mass) / (2 * dP)
 
-            # Properties
-            rho = w.density_mass
-            u = w.int_energy_mass
-            h = w.enthalpy_mass
+    w3 = ct.Water(); w3.TP = T + dT, P
+    w4 = ct.Water(); w4.TP = T - dT, P
+    drho_dT = (w3.density_mass - w4.density_mass) / (2 * dT)
+    du_dT = (w3.int_energy_mass - w4.int_energy_mass) / (2 * dT)
 
-            # Flow rates (averaged densities)
-            mdot_in = mdot(P1, P, 0.5 * (rho_in + rho), Cd, A)
-            mdot_out = mdot(P, P2, 0.5 * (rho + rho_out), Cd, A)
-            edot_in_val = edot(mdot_in, h_in)
-            edot_out_val = edot(mdot_out, h)
-
-            # Conservation residuals
-            mass_residual = (rho * V - M) / dt + (mdot_out - mdot_in)
-            energy_residual = (rho * u * V - U) / dt + (edot_out_val - edot_in_val)
-
-            # Scaling
-            mass_scale = abs(mdot_in + mdot_out) / V + 1e-6
-            energy_scale = abs(edot_in_val + edot_out_val) / V + 1e-6
-
-            return [mass_residual / mass_scale, energy_residual / energy_scale]
-
-        except Exception:
-            return [1e9, 1e9]
-
-    sol = root(residual, [P_guess, h_guess], method='lm')
-    if not sol.success:
-        raise RuntimeError(f"Solver failed: {sol.message}")
-    
-    P_guess, h_guess = sol.x
-    
-
-    w = ct.Water()
-    w.HP = h_guess, P_guess
     rho = w.density_mass
     u = w.int_energy_mass
+
+    return {
+        "drho_dP": drho_dP,
+        "drho_dT": drho_dT,
+        "du_dP": du_dP,
+        "du_dT": du_dT,
+        "rho": rho,
+        "u": u
+    }
+
+
+def mass_energy_to_state_derivatives(partials, dMdt, dUdt, V):
+    """
+    Convert dM/dt and dU/dt into dP/dt and dT/dt using thermodynamic partials.
+
+    Parameters:
+    - partials: dict from the `partials()` function
+    - dMdt: time derivative of mass [kg/s]
+    - dUdt: time derivative of internal energy [J/s]
+    - V: control volume [m³]
+
+    Returns:
+    - dPdt: time derivative of pressure [Pa/s]
+    - dTdt: time derivative of temperature [K/s]
+    """
+    drho_dP = partials["drho_dP"]
+    drho_dT = partials["drho_dT"]
+    du_dP   = partials["du_dP"]
+    du_dT   = partials["du_dT"]
+    rho     = partials["rho"]
+    u       = partials["u"]
+
+    # Construct Jacobian matrix J = d(M, U)/d(P, T)
+    J = np.array([
+        [drho_dP * V, drho_dT * V],
+        [(drho_dP * u + rho * du_dP) * V, (drho_dT * u + rho * du_dT) * V]
+    ])
+
+    rhs = np.array([dMdt, dUdt])
+
+    # Solve for [dP/dt, dT/dt]
+    dPdt, dTdt = np.linalg.solve(J, rhs)
+
+    return dPdt, dTdt
+
+def dstate_dt(t, y):
+    P, T = y
+
+    # Set state
+    w = ct.Water()
+    T_safe = np.clip(T, 274, 1000)   # restrict to [0°C, 1000 K]
+    P_safe = max(P, 1e3)                # avoid vacuum/negative pressure
+
+    try:
+        w.TP = T_safe, P_safe
+    except Exception as e:
+        print(f"[t={t:.3f}s] Invalid TP set: T={T}, P={P}. Clipped to T={T_safe}, P={P_safe}")
+        raise e
+
+    rho = w.density_mass
+    #u = w.int_energy_mass
     h = w.enthalpy_mass
 
+    # Flow properties
+    rho_avg_in = 0.5 * (rho + rho_in)
+    rho_avg_out = 0.5 * (rho + rho_out)
 
-    m_in = mdot(P1, P_guess, 0.5 * (rho_in + rho), Cd, A)
-    m_out = mdot(P_guess, P2, 0.5 * (rho + rho_out), Cd, A)
-    edot_in_val = edot(m_in, h_in)
-    edot_out_val = edot(m_out, h)
+    m_in = mdot(P1, P, rho_avg_in, Cd, A)
+    m_out = mdot(P, P2, rho_avg_out, Cd, A)
 
-    # Update mass and energy by integration (conservation)
-    M_new = M + dt * (m_in - m_out)
-    U_new = U + dt * (edot_in_val - edot_out_val)
-    dMdt = (M_new - M) / dt
+    e_in = edot(m_in, h_in)
+    e_out = edot(m_out, h_out)
 
-    # Print current state
-    print(f"t = {t:.3f} s | P = {P_guess:.2f} Pa | h = {h_guess:.4f} J/kg | dM/dt = {dMdt:.4f} kg/s | mdot_in = {m_in:.4f} | mdot_out = {m_out:.4f}")
+    dMdt = m_in - m_out
+    dUdt = e_in - e_out
 
-    # Store for plotting
-    t_vals.append(t)
-    P_vals.append(P_guess)
-    m_in_vals.append(m_in)
-    m_out_vals.append(m_out)
+    # Thermo partials
+    partial = partials(w)
 
-    M = M_new
-    U = U_new
-    t += dt
-    step += 1
+    # Compute dP/dt and dT/dt
+    dPdt, dTdt = mass_energy_to_state_derivatives(partial, dMdt, dUdt, V)
 
-
-def compute_steady_state_time(time, signals, threshold=1e-5, window=10):
-    """
-    Compute the time when any signal reaches steady state.
+    # Print diagnostics
+    print(f"t = {t:.3f} s | P = {P:.2f} Pa | T = {T:.2f} K | "
+          f"mdot_in = {m_in:.5f} kg/s | mdot_out = {m_out:.5f} kg/s | "
+          #f"dM/dt = {dMdt:.5f} kg/s | dU/dt = {dUdt:.2f} W")
+          f"edot_in = {e_in:.3f} W/s | edot_out = {e_out:.3f} W/s")
     
-    Parameters:
-    - time: list or array of time points
-    - signals: list of signals (each a list of values over time)
-    - threshold: max allowed rate of change (absolute)
-    - window: how many steps in a row must meet the threshold
-    
-    Returns:
-    - steady_time: time when steady state is reached
-    - signal_index: index of the signal that first reached it
-    """
-    signals = np.array(signals)
-    time = np.array(time)
-    dt = np.diff(time)
-
-    for i, y in enumerate(signals):
-        dy = np.diff(y)
-        rate = np.abs(dy / dt)
-
-        # Find where the rate stays below the threshold for `window` steps
-        for j in range(len(rate) - window):
-            if np.all(rate[j:j+window] < threshold):
-                return time[j + window], i  # return time and signal index
-    
-    return None, None  # steady state not reached
+    return [dPdt, dTdt]
 
 
+# Solve from t=0 to t_end
+mdot_in_vals = []
+mdot_out_vals = []
+edot_in_vals = []
+edot_out_vals = []
 
-# Plotting results
+sol = solve_ivp(
+    dstate_dt,
+    [0, t_end],
+    [P0, T0],
+    method='LSODA',
+    t_eval=np.linspace(0, t_end, int(t_end / dt) + 1),
+    dense_output=True,
+    rtol=1e-3,
+    atol=1e-6
+)
+
+# Extract results
+t_vals = sol.t
+P_vals, T_vals = sol.y
+
+# Recompute flow values at t_eval
+mdot_in_vals = []
+mdot_out_vals = []
+edot_in_vals = []
+edot_out_vals = []
+
+for t, P, T in zip(sol.t, sol.y[0], sol.y[1]):
+    w = ct.Water()
+    T_safe = np.clip(T, 274, 1000)
+    P_safe = max(P, 1e3)
+
+    try:
+        w.TP = T_safe, P_safe
+    except Exception as e:
+        print(f"[postprocess] t={t:.3f}s: Invalid TP set — T={T}, P={P} → clipped to T={T_safe}, P={P_safe}")
+        raise e
+
+
+    rho_avg_in = 0.5 * (rho + rho_in)
+    rho_avg_out = 0.5 * (rho + rho_out)
+
+    m_in = mdot(P1, P, rho_avg_in, Cd, A)
+    m_out = mdot(P, P2, rho_avg_out, Cd, A)
+
+    e_in = edot(m_in, h_in)
+    e_out = edot(m_out, h_out)
+
+    mdot_in_vals.append(m_in)
+    mdot_out_vals.append(m_out)
+    edot_in_vals.append(e_in)
+    edot_out_vals.append(e_out)
+
+
+# Plot results
 plt.figure(figsize=(12, 6))
 
 plt.subplot(2, 1, 1)
@@ -168,17 +222,34 @@ plt.grid()
 plt.legend()
 
 plt.subplot(2, 1, 2)
-plt.plot(t_vals, m_in_vals, label='Inlet mdot [kg/s]')
-plt.plot(t_vals, m_out_vals, label='Outlet mdot [kg/s]')
-plt.ylabel("Mass Flow Rate [kg/s]")
+plt.plot(t_vals, T_vals, label='Temperature [K]', color='orange')
+plt.ylabel("Temperature [K]")
 plt.xlabel("Time [s]")
 plt.grid()
 plt.legend()
 
 plt.tight_layout()
 
-t, _ = compute_steady_state_time(t_vals, [m_in_vals])
-print(f"time: {t:.2f}")
+# Plot mass flow rates
+plt.figure(figsize=(12, 4))
+plt.plot(t_vals, mdot_in_vals, label='mdot_in [kg/s]')
+plt.plot(t_vals, mdot_out_vals, label='mdot_out [kg/s]')
+plt.ylabel("Mass Flow Rate [kg/s]")
+plt.xlabel("Time [s]")
+plt.title("Mass Flow Rates")
+plt.grid()
+plt.legend()
+
+# Plot energy flow rates
+plt.figure(figsize=(12, 4))
+plt.plot(t_vals, edot_in_vals, label='edot_in [W]')
+plt.plot(t_vals, edot_out_vals, label='edot_out [W]')
+plt.ylabel("Energy Flow Rate [W]")
+plt.xlabel("Time [s]")
+plt.title("Energy Flow Rates")
+plt.grid()
+plt.legend()
 
 plt.show()
+
 
