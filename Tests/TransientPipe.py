@@ -1,6 +1,5 @@
 import numpy as np
-from scipy.optimize import root 
-from scipy.integrate import solve_ivp
+from scipy.integrate import LSODA
 import cantera as ct
 import matplotlib.pyplot as plt
 
@@ -26,12 +25,13 @@ def pipe_ss(fluid, P1, T1, P2, T2, R):
     rho1 = fluid.density_mass
     fluid.TP = T2, P2
     rho2 = fluid.density_mass
-    rho = 0.5*(rho1 + rho2)
+    rho = 0.5*(rho1 + rho2) 
 
     dp = P1 - P2
     return np.sign(dp) * np.sqrt(rho * np.abs(dp) / R )
 
-def pipe(fluid, P1, T1, P2, T2, R, L, mdot_old, dt):
+
+def pipe(fluid, P1, T1, P2, T2, R, L, mdot_old):
     fluid.TP = T1, P1
     rho1 = fluid.density_mass
     fluid.TP = T2, P2
@@ -44,17 +44,27 @@ def pipe(fluid, P1, T1, P2, T2, R, L, mdot_old, dt):
     return dmdt
 
 
-T = np.arange(t_start, t_end + dt, dt)
-mdot = np.zeros(len(T))
+def rhs(t, y):
+    return [pipe(fluid, P1, T1, P2, T2, R, L, y[0])]
+
+
+solver = LSODA(rhs, t0=t_start, y0=[mdot0], t_bound=t_end, max_step=dt)
+
+t_vals = [solver.t]
+mdot_vals = [solver.y[0]]
+
+while solver.status == 'running':
+    solver.step()
+    t_vals.append(solver.t)
+    mdot_vals.append(solver.y[0])
+
+
+t_vals = np.array(t_vals)
+mdot_vals = np.array(mdot_vals)
+
 mdot_ss = pipe_ss(fluid, P1, T1, P2, T2, R)
 
-
-def rhs(t, y):
-    return pipe(fluid, P1, T1, P2, T2, R, L, y[0], dt)
-
-sol = solve_ivp(rhs, [t_start, t_end], [mdot0], method="LSODA", t_eval=T)#, rtol=1e-6, atol=1e-9, max_step=1e-3)
-
-plt.plot(sol.t, sol.y[0], label="Transient mdot")
+plt.plot(t_vals, mdot_vals, label="Transient mdot")
 plt.axhline(mdot_ss, color="r", linestyle="--", label="Steady-state")
 plt.title(f"Transient Mass Flow (kg/s), Cd = {Cd}, A = {A} m^2")
 plt.ylabel("Mass Flow (kg/s)")
