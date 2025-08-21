@@ -5,13 +5,13 @@ from ambiance import Atmosphere
 from scipy.integrate import LSODA
 
 t_start = 0
-dt = 0.01
+dt = 1
 t_end = 500
 
 # Tank initial conditions
 P = 101325    # Pa (designated base pressure)
 T = 300    # K
-M0 = 1e5   # kg
+M0 = 1e3   # kg
 fluid = ct.Water()
 
 fluid.TP = T, P

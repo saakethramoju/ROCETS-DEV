@@ -4,7 +4,7 @@ from Fluids import BaseFluid, Mixture
 
 if TYPE_CHECKING:
     from .FlowPort import FlowPort
-    from System import System
+    from Scrapped.System import System
 
 class FlowNode:
     """
