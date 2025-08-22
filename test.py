@@ -10,19 +10,20 @@ import Constants
 class Pipe(Component):
 
     configuration_keys = ["Discharge Coefficient",
-                          "Cross-sectional Area (sq. m.)",
+                          "Cross-sectional Area (m^2)",
                           "Length (m)"]
     state_keys = ["Mass Flow (kg/s)"]
     inflow_keys = ["Source"]
     outflow_keys = ["Drain"]
+    fluid_keys = ["Fluid"]
 
-    '''def __init__(self, name, parent=None, type_=ComponentType.FLOW):
-        super().__init__(name, parent, type_)'''
 
     def steady_state(self):
 
+        self["Fluid"](self["Source"].fluid)
+
         Cd = pipe["Discharge Coefficient"]()
-        A = pipe["Cross-sectional Area (sq. m.)"]() # m^2
+        A = pipe["Cross-sectional Area (m^2)"]() # m^2
 
         R = 1 / (2 * (Cd * A) ** 2)
         rho1 = self["Source"].fluid.density_mass
@@ -30,13 +31,17 @@ class Pipe(Component):
         rho = 0.5 * (rho1 + rho2)
 
         dp = self["Source"].fluid.P - self["Drain"].fluid.P
-        return np.sign(dp) * np.sqrt(rho * np.abs(dp) / R)
+        mdot = np.sign(dp) * np.sqrt(rho * np.abs(dp) / R)
+        self["Mass Flow (kg/s)"](mdot)
+        return mdot
 
 
     def transient(self, damping_strong=2.0, eps=200.0):
 
+        self["Fluid"](self["Source"].fluid)
+
         Cd = pipe["Discharge Coefficient"]()
-        A = pipe["Cross-sectional Area (sq. m.)"]() # m^2
+        A = pipe["Cross-sectional Area (m^2)"]() # m^2
         l = pipe["Length (m)"]()  # m
         mdot_old = self["Mass Flow (kg/s)"]()
 
@@ -59,18 +64,61 @@ class Pipe(Component):
 
 class Tank(Component):
 
-    configuration_keys = ["Cross-sectional Area (sq. m.)",
-                          "Length (m)"]
-    state_keys = ["Pressure (Pa)",
-                  "Enthalpy (J/kg)",
-                  "Fluid Mass (kg)"]
+    configuration_keys = ["Cross-sectional Area (m^2)",
+                          "Fluid Mass (kg)"]
+    state_keys = ["Effective Pressure (Pa)",
+                  "Effective Enthalpy (J/kg)",
+                  "Ullage Pressure (Pa)",
+                  "Fluid Height (m)",
+                  "Fluid Volume (m^3)"]
     outflow_keys = ["Drain"]
+    fluid_keys = ["Ullage",
+                  "Bulk"] # take input for fluid only if Junction
+
+    component_type = ComponentType.JUNCTION
+
+
+    def steady_state(self):
+
+        self["Ullage Pressure (Pa)"](self["Ullage"]().P)
+
+        P = self["Ullage Pressure (Pa)"]()
+        rho = self["Ullage"]().density_mass
+        V = self["Fluid Mass (kg)"]() / rho
+        h = V / self["Cross-sectional Area (m^2)"]()
+        P_eff = P + rho*Constants.g*h
+        T = self["Bulk"]().T
+
+        self["Bulk"]().TP = T, P_eff
+        self["Drain"].fluid = self["Bulk"]()
+        self["Effective Pressure (Pa)"](P_eff)
+        self["Effective Enthalpy (J/kg)"](self["Drain"].fluid.enthalpy_mass)
+        self["Fluid Height (m)"](h)
+        self["Fluid Volume (m^3)"](V)
+        return P_eff
+
 
 
 tank = Tank("Tank")
-
 pipe = Pipe("Line")
-pipe["Source"].fluid.TP = 300, 2e5
+tank.connect("Drain", pipe, "Source")
+
+'''ox = ct.Oxygen()
+ox.TP = 300, 101325
+m = ct.Methane()
+m.TP = 400, 101325
+tank["Bulk"] = ([0.0, 0.5], [ox, m])'''
+w = ct.Water()
+w.TP = 300, 101325
+tank["Bulk"] = w
+air = ct.Solution("air.yaml")
+air.TP = 300, 101325
+tank["Ullage"] = air
+tank["Fluid Mass (kg)"] = 1e3 # kg
+tank["Cross-sectional Area (sq. m.)"] = 0.1 # m^2
+
+
+
 pipe["Discharge Coefficient"] = 0.8
 #pipe["Discharge Coefficient"] = ([0, 0.5, 0.8], [0.5, 0.6, 0.8])
 pipe["Cross-sectional Area (sq. m.)"] = 5.1e-4 
@@ -78,6 +126,9 @@ pipe["Cross-sectional Area (sq. m.)"] = 5.1e-4
 #A = 0.001 * t +  5.1e-4
 #pipe["Cross-sectional Area (sq. m.)"] = (t, A)
 pipe["Length (m)"] = 0.5 
+
+print(tank.steady_state())
+print(pipe.steady_state())
 
 
 t_start = 0
@@ -107,6 +158,12 @@ plt.ylabel("Mass Flow (kg/s)")
 plt.xlabel("Time (s)")
 plt.legend()
 #plt.show()
+
+
+
+#times, fluids = pipe["Fluid"].history
+#for t, f in zip(times, fluids):
+#    print(t, f.Q)
 
 
 '''

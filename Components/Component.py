@@ -3,7 +3,7 @@ from typing import List, Dict, Optional, TYPE_CHECKING, Union
 from prettytable import PrettyTable
 from Ports import InFlow, OutFlow
 from .ComponentType import ComponentType
-from .Value import State, Parameter
+from .Value import State, Parameter, Fluid
 
 
 if TYPE_CHECKING:
@@ -17,34 +17,39 @@ class Component:
 
     configuration_keys: List[str] = []
     state_keys: List[str] = []
-    inflow_keys: List[str] = []   # subclasses override
-    outflow_keys: List[str] = []  # subclasses override
+    inflow_keys: List[str] = []
+    outflow_keys: List[str] = [] 
+    fluid_keys: List[str] = [] 
+
+    component_type: ComponentType = ComponentType.FLOW
 
     def __init__(
         self,
         name: str,
         parent: Optional["System"] = None,
-        type_: ComponentType = ComponentType.FLOW,
     ):
         self.name = name
         self.parent = parent
         self.inflows: List[InFlow] = []
         self.outflows: List[OutFlow] = []
-        self.type = type_
         self._states: Dict[str, State] = {}
         self._parameters: Dict[str, Parameter] = {}
+        self._fluids: Dict[str, Fluid] = {}
 
         self._initialize_default_ports()
         self._initialize_default_states()
         self._initialize_configuration()
+        self._initialize_default_fluids()
 
 
+    # -----------------------------
+    # Configuration
+    # -----------------------------
     def _initialize_configuration(self):
         for key in self.configuration_keys:
             self.add_parameter(key)
 
     def add_parameter(self, name: str, initial=None):
-        """Add and register a new Parameter object."""
         if name in self._parameters:
             raise ValueError(f"Parameter '{name}' already exists in {self.name}")
         self._parameters[name] = Parameter(name, initial)
@@ -56,14 +61,13 @@ class Component:
 
 
     # -----------------------------
-    # State registration
+    # States
     # -----------------------------
     def _initialize_default_states(self):
         for key in self.state_keys:
             self.add_state(key)
 
     def add_state(self, name: str, initial=None):
-        """Add and register a new State object."""
         if name in self._states:
             raise ValueError(f"State '{name}' already exists in {self.name}")
         self._states[name] = State(name, initial)
@@ -72,6 +76,23 @@ class Component:
     @property
     def states(self):
         return list(self._states.keys())
+    
+    # -----------------------------
+    # Fluids
+    # -----------------------------
+    def _initialize_default_fluids(self):
+        for key in self.fluid_keys:
+            self.add_fluid(key)
+
+    def add_fluid(self, name: str, initial=None):
+        if name in self._fluids:
+            raise ValueError(f"Fluid '{name}' already exists in {self.name}")
+        self._fluids[name] = Fluid(name, initial)
+        return self._fluids[name]
+
+    @property
+    def fluids(self):
+        return list(self._fluids.keys())
 
     # -----------------------------
     # Add inflow/outflow (factory style)
@@ -175,44 +196,54 @@ class Component:
             return self._parameters[match[0]]
         return None
 
+    def _fuzzy_find_fluid(self, name: str) -> Optional[Fluid]:   # NEW
+        candidates = list(self._fluids.keys())
+        match = difflib.get_close_matches(name, candidates, n=1, cutoff=0.6)
+        if match:
+            return self._fluids[match[0]]
+        return None
 
     # -----------------------------
     # Dict-like access: states + ports + parameters
     # -----------------------------
 
     def __getitem__(self, key: str):
-        # Try states first
+        # States
         state = self._fuzzy_find_state(key)
         if state:
             return state
-
-        # Then parameters
+        # Parameters
         param = self._fuzzy_find_parameter(key)
         if param:
             return param
-
-        # Then ports
+        # Fluids
+        fluid = self._fuzzy_find_fluid(key)
+        if fluid:
+            return fluid
+        # Ports
         port = self._fuzzy_find_port(key)
         if port:
             return port
+        raise KeyError(f"No state, parameter, fluid, or port found for '{key}' in {self.name}")
 
-        raise KeyError(f"No state, parameter, or port found for '{key}' in {self.name}")
-    
 
     def __setitem__(self, key: str, value):
-        # --- States ---
+        # States
         state = self._fuzzy_find_state(key)
         if state:
-            state.set(value)   # <--- unified
+            state.set(value)
             return
-
-        # --- Parameters ---
+        # Parameters
         param = self._fuzzy_find_parameter(key)
         if param:
-            param.set(value)   # <--- unified
+            param.set(value)
             return
-
-        # --- Ports ---
+        # Fluids
+        fluid = self._fuzzy_find_fluid(key)
+        if fluid:
+            fluid.set(value)
+            return
+        # Ports
         port = self._fuzzy_find_port(key)
         if port:
             if hasattr(value, "TP"):  # Cantera fluid
@@ -222,8 +253,7 @@ class Component:
             else:
                 raise TypeError("Value must be a Cantera fluid, a number (mass flow), or None.")
             return
-
-        raise KeyError(f"No state, parameter, or port found for '{key}' in {self.name}")
+        raise KeyError(f"No state, parameter, fluid, or port found for '{key}' in {self.name}")
 
     # -----------------------------
     # Equality & hashing (needed for set operations in System)
@@ -238,7 +268,7 @@ class Component:
     # Representations
     # -----------------------------
     def __repr__(self):
-        return f"<Component {self.name} type={self.type.name}>"
+        return f"<Component {self.name} type={self.component_type.name}>"
 
     def __str__(self):
         parent_name = self.parent.name if self.parent else "None"
@@ -284,6 +314,6 @@ class Component:
             )
 
         return (
-            f"Component '{self.name}' (Type: {self.type.name}, Parent: {parent_name})\n"
+            f"Component '{self.name}' (Type: {self.component_type.name}, Parent: {parent_name})\n"
             f"{table}"
         )
