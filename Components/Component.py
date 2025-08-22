@@ -1,11 +1,13 @@
 import difflib
-from typing import List, Optional, TYPE_CHECKING, Union
+from typing import List, Dict, Optional, TYPE_CHECKING, Union
 from prettytable import PrettyTable
 from Ports import InFlow, OutFlow
 from .ComponentType import ComponentType
+from .Value import State, Parameter
+
 
 if TYPE_CHECKING:
-    from ..Scrapped.System import System
+    from System import System
 
 
 class Component:
@@ -14,6 +16,9 @@ class Component:
     """
 
     configuration_keys: List[str] = []
+    state_keys: List[str] = []
+    inflow_keys: List[str] = []   # subclasses override
+    outflow_keys: List[str] = []  # subclasses override
 
     def __init__(
         self,
@@ -25,8 +30,48 @@ class Component:
         self.parent = parent
         self.inflows: List[InFlow] = []
         self.outflows: List[OutFlow] = []
-        self.configuration: dict = {}
         self.type = type_
+        self._states: Dict[str, State] = {}
+        self._parameters: Dict[str, Parameter] = {}
+
+        self._initialize_default_ports()
+        self._initialize_default_states()
+        self._initialize_configuration()
+
+
+    def _initialize_configuration(self):
+        for key in self.configuration_keys:
+            self.add_parameter(key)
+
+    def add_parameter(self, name: str, initial=None):
+        """Add and register a new Parameter object."""
+        if name in self._parameters:
+            raise ValueError(f"Parameter '{name}' already exists in {self.name}")
+        self._parameters[name] = Parameter(name, initial)
+        return self._parameters[name]
+    
+    @property
+    def parameters(self):
+        return list(self._parameters.keys())
+
+
+    # -----------------------------
+    # State registration
+    # -----------------------------
+    def _initialize_default_states(self):
+        for key in self.state_keys:
+            self.add_state(key)
+
+    def add_state(self, name: str, initial=None):
+        """Add and register a new State object."""
+        if name in self._states:
+            raise ValueError(f"State '{name}' already exists in {self.name}")
+        self._states[name] = State(name, initial)
+        return self._states[name]
+
+    @property
+    def states(self):
+        return list(self._states.keys())
 
     # -----------------------------
     # Add inflow/outflow (factory style)
@@ -41,6 +86,13 @@ class Component:
         self.outflows.append(port)
         return port
 
+    def _initialize_default_ports(self):
+        """Create default ports from inflow_keys and outflow_keys."""
+        for name in self.inflow_keys:
+            self.add_inflow(name)
+        for name in self.outflow_keys:
+            self.add_outflow(name)
+
     # -----------------------------
     # Connect logic
     # -----------------------------
@@ -54,7 +106,7 @@ class Component:
         Connect this component to another.
 
         Usage:
-        - comp1.connect(comp2) -> fuzzy-match ports
+        - comp1.connect(comp2) -> fuzzy-match ports (or fallback to first available)
         - comp1.connect("Out1", comp2, "InA") -> connect specific ports with fuzzy matching
         """
         if isinstance(other, Component) and other_comp is None:
@@ -66,7 +118,10 @@ class Component:
                 match = difflib.get_close_matches(outp.name, candidates, n=1, cutoff=0.6)
                 if match:
                     other_port_obj = next(p for p in other.inflows if p.name == match[0])
-                    outp.connect(other_port_obj)
+                else:
+                    # fallback: first available inflow
+                    other_port_obj = other.inflows[0]
+                outp.connect(other_port_obj)
 
             for inp in self.inflows:
                 candidates = [p.name for p in other.outflows]
@@ -75,7 +130,10 @@ class Component:
                 match = difflib.get_close_matches(inp.name, candidates, n=1, cutoff=0.6)
                 if match:
                     other_port_obj = next(p for p in other.outflows if p.name == match[0])
-                    inp.connect(other_port_obj)
+                else:
+                    # fallback: first available outflow
+                    other_port_obj = other.outflows[0]
+                inp.connect(other_port_obj)
 
         elif isinstance(other, str) and isinstance(other_comp, Component) and isinstance(other_port, str):
             # Case 2: connect explicit ports by fuzzy name
@@ -92,35 +150,89 @@ class Component:
         else:
             raise TypeError("Invalid arguments for connect().")
 
+    # -----------------------------
+    # Fuzzy matching helpers
+    # -----------------------------
+    def _fuzzy_find_state(self, name: str) -> Optional[State]:
+        candidates = list(self._states.keys())
+        match = difflib.get_close_matches(name, candidates, n=1, cutoff=0.6)
+        if match:
+            return self._states[match[0]]   # return the State object, not the string
+        return None
+
     def _fuzzy_find_port(self, name: str):
-        """Find a port (inflow or outflow) by fuzzy name matching."""
         all_ports = self.inflows + self.outflows
         candidates = [p.name for p in all_ports]
         match = difflib.get_close_matches(name, candidates, n=1, cutoff=0.6)
         if match:
             return next(p for p in all_ports if p.name == match[0])
         return None
+        
+    def _fuzzy_find_parameter(self, name: str) -> Optional[Parameter]:
+        candidates = list(self._parameters.keys())
+        match = difflib.get_close_matches(name, candidates, n=1, cutoff=0.6)
+        if match:
+            return self._parameters[match[0]]
+        return None
+
 
     # -----------------------------
-    # Dict-like access to ports
+    # Dict-like access: states + ports + parameters
     # -----------------------------
+
     def __getitem__(self, key: str):
+        # Try states first
+        state = self._fuzzy_find_state(key)
+        if state:
+            return state
+
+        # Then parameters
+        param = self._fuzzy_find_parameter(key)
+        if param:
+            return param
+
+        # Then ports
         port = self._fuzzy_find_port(key)
-        if port is None:
-            raise KeyError(f"No matching port found for '{key}' in {self.name}")
-        return port
+        if port:
+            return port
+
+        raise KeyError(f"No state, parameter, or port found for '{key}' in {self.name}")
+    
 
     def __setitem__(self, key: str, value):
+        # --- States ---
+        state = self._fuzzy_find_state(key)
+        if state:
+            state.set(value)   # <--- unified
+            return
+
+        # --- Parameters ---
+        param = self._fuzzy_find_parameter(key)
+        if param:
+            param.set(value)   # <--- unified
+            return
+
+        # --- Ports ---
         port = self._fuzzy_find_port(key)
-        if port is None:
-            raise KeyError(f"No matching port found for '{key}' in {self.name}")
-        # If you pass in a Cantera fluid, set fluid. Otherwise try setting mass_flow.
-        if hasattr(value, "TP"):  # crude check if it's a Cantera fluid
-            port.fluid = value
-        elif isinstance(value, (int, float)) or value is None:
-            port.mass_flow = value
-        else:
-            raise TypeError("Value must be a Cantera fluid, a number (mass flow), or None.")
+        if port:
+            if hasattr(value, "TP"):  # Cantera fluid
+                port.fluid = value
+            elif isinstance(value, (int, float)) or value is None:
+                port.mass_flow = value
+            else:
+                raise TypeError("Value must be a Cantera fluid, a number (mass flow), or None.")
+            return
+
+        raise KeyError(f"No state, parameter, or port found for '{key}' in {self.name}")
+
+    # -----------------------------
+    # Equality & hashing (needed for set operations in System)
+    # -----------------------------
+    def __eq__(self, other):
+        return isinstance(other, Component) and id(self) == id(other)
+
+    def __hash__(self):
+        return id(self)
 
     # -----------------------------
     # Representations
@@ -129,7 +241,7 @@ class Component:
         return f"<Component {self.name} type={self.type.name}>"
 
     def __str__(self):
-        parent_name = self.parent.__class__.__name__ if self.parent else "None"
+        parent_name = self.parent.name if self.parent else "None"
 
         table = PrettyTable()
         table.field_names = [
@@ -141,7 +253,7 @@ class Component:
             "T [K]",
             "P [Pa]",
             "Q (quality)",
-            "ṁ [kg/s]",   # <-- new column
+            "ṁ [kg/s]",
         ]
 
         for port in self.inflows + self.outflows:
