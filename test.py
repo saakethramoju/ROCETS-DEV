@@ -1,10 +1,9 @@
-from Components import Component, ComponentType, Balance
+from Components import Component, ComponentType
 import Globals
 from System import System
 import cantera as ct
 import numpy as np
 from scipy.integrate import LSODA
-from scipy.optimize import root
 import matplotlib.pyplot as plt
 import Constants
 
@@ -18,12 +17,13 @@ class Pipe(Component):
     outflow_keys = ["Drain"]
     fluid_keys = ["Fluid"]
 
+
     def steady_state(self):
 
         self["Fluid"](self["Source"].fluid)
 
         Cd = pipe["Discharge Coefficient"]()
-        A = pipe["Cross-sectional Area (m^2)"]()
+        A = pipe["Cross-sectional Area (m^2)"]() # m^2
 
         R = 1 / (2 * (Cd * A) ** 2)
         rho1 = self["Source"].fluid.density_mass
@@ -35,13 +35,14 @@ class Pipe(Component):
         self["Mass Flow (kg/s)"](mdot)
         return mdot
 
+
     def transient(self, damping_strong=2.0, eps=200.0):
 
         self["Fluid"](self["Source"].fluid)
 
         Cd = pipe["Discharge Coefficient"]()
-        A = pipe["Cross-sectional Area (m^2)"]()
-        l = pipe["Length (m)"]()
+        A = pipe["Cross-sectional Area (m^2)"]() # m^2
+        l = pipe["Length (m)"]()  # m
         mdot_old = self["Mass Flow (kg/s)"]()
 
         L = l / A
@@ -54,6 +55,7 @@ class Pipe(Component):
 
         drive = np.sign(dp) * (np.abs(dp) - R * (mdot_old**2) / rho) * (1 / L)
 
+        # adaptive damping that gets VERY strong when |dp| < eps
         damp_coeff = damping_strong / (1 + (np.abs(dp) / eps))
         decay = -damp_coeff * mdot_old
 
@@ -70,9 +72,11 @@ class Tank(Component):
                   "Fluid Height (m)",
                   "Fluid Volume (m^3)"]
     outflow_keys = ["Drain"]
-    fluid_keys = ["Ullage", "Bulk"]
+    fluid_keys = ["Ullage",
+                  "Bulk"] # take input for fluid only if Junction
 
     component_type = ComponentType.JUNCTION
+
 
     def steady_state(self):
 
@@ -95,99 +99,57 @@ class Tank(Component):
 
 
 
-# --- setup system ---
 tank = Tank("Tank")
 pipe = Pipe("Line")
+#tank.connect("Drain", pipe, "Source")
 
+'''ox = ct.Oxygen()
+ox.TP = 300, 101325
+m = ct.Methane()
+m.TP = 400, 101325
+tank["Bulk"] = ([0.0, 0.5], [ox, m])'''
 w = ct.Water()
 w.TP = 300, 101325
 tank["Bulk"] = w
 air = ct.Solution("air.yaml")
 air.TP = 300, 101325
 tank["Ullage"] = air
-tank["Fluid Mass (kg)"] = 1e3
-tank["Cross-sectional Area (sq. m.)"] = 0.1
+tank["Fluid Mass (kg)"] = 1e3 # kg
+tank["Cross-sectional Area (sq. m.)"] = 0.1 # m^2
+
 
 pipe["Source"].fluid.TP = 300, 2e5
 pipe["Discharge Coefficient"] = 0.8
+#pipe["Discharge Coefficient"] = ([0, 0.5, 0.8], [0.5, 0.6, 0.8])
 pipe["Cross-sectional Area (sq. m.)"] = 5.1e-4 
+#t = np.linspace(0, 1, 100)
+#A = 0.001 * t +  5.1e-4
+#pipe["Cross-sectional Area (sq. m.)"] = (t, A)
 pipe["Length (m)"] = 0.5 
 
-# --- balances ---
-b1 = Balance(pipe["Discharge Coefficient"], pipe["Mass Flow (kg/s)"], 1)
-balances = [b1]
+#print(tank.steady_state())
+#print(pipe.steady_state())
 
 
-def solve_balances(balances, components, mode="steady", t=None):
-    if t is None:
-        t = Globals.get_time()
-
-    x0 = [bal.independent[t] for bal in balances]
-
-    def F(z):
-        for bal, val in zip(balances, z):
-            bal.set_independent(val, t)
-        for comp in components:
-            if mode == "steady":
-                comp.steady_state()
-            elif mode == "transient":
-                comp.transient()
-        return [bal.residual(t) for bal in balances]
-
-    sol = root(F, x0)
-    return sol
-
-
-# --- enforce balances once before integration ---
-pipe["Mass Flow (kg/s)"] = 0.0
-solve_balances(balances, [pipe], mode="steady", t=0.0)
-
-print("Initial Cd solved:", pipe["Discharge Coefficient"]())
-
-
-# --- transient integrator setup ---
-t_start, dt, t_end = 0, 0.01, 1
+t_start = 0
+dt = 0.01
+t_end = 1
 
 def rhs(t, y):
-    Globals.set_time(t)
+    return pipe.transient()
 
-    mdot = y[0]
-    pipe["Mass Flow (kg/s)"](mdot)
-
-    if balances:
-        def balance_resids(z):
-            for bal, val in zip(balances, z):
-                bal.set_independent(val, t)
-            for comp in [pipe]:
-                comp.transient()
-            return [bal.residual(t) for bal in balances]
-
-        x0 = [bal.independent[t] for bal in balances]
-        sol = root(balance_resids, x0)
-        if sol.success:
-            for bal, val in zip(balances, sol.x):
-                bal.set_independent(val, t)
-
-    f = pipe.transient()
-
-    # if mass flow is pinned, kill derivative
-    for bal in balances:
-        if bal.dep1 is pipe["Mass Flow (kg/s)"] and not hasattr(bal.dep2, "__getitem__"):
-            f = 0.0
-
-    return [f]
-
-
+# Initialize state
+pipe["Mass Flow (kg/s)"] = 0.0   # constant initialization
 solver = LSODA(rhs, t0=t_start, y0=[pipe["Mass Flow (kg/s)"].value],
                t_bound=t_end, max_step=dt)
 
 Globals.reset_time()
 while solver.status == 'running':
+    Globals.set_time(solver.t) # update global simulation time
     solver.step()
-    Globals.set_time(solver.t)
-    pipe["Mass Flow (kg/s)"][solver.t] = solver.y[0]
+    pipe["Mass Flow (kg/s)"][solver.t] = solver.y[0] # record value at solver.t
 
-# --- post process ---
+# Extract times and values from State
 times, mdot_vals = pipe["Mass Flow (kg/s)"].history
 
 plt.plot(times, mdot_vals, label="Transient mdot")
@@ -195,11 +157,13 @@ plt.title("Transient Mass Flow (kg/s)")
 plt.ylabel("Mass Flow (kg/s)")
 plt.xlabel("Time (s)")
 plt.legend()
-#plt.show()
+plt.show()
 
-for t, f in zip(times, mdot_vals):
-    print(t, f, pipe["Discharge Coefficient"][t])
 
+
+#times, fluids = pipe["Fluid"].history
+#for t, f in zip(times, fluids):
+#    print(t, f.Q)
 
 
 '''
@@ -266,17 +230,3 @@ print("History:", pipe["Mass Flow (kg/s)"].history)
 pipe["Mass Flow (kg/s)"][0.75] = 0.08
 print("After insertion at 0.75:", pipe["Mass Flow (kg/s)"][0.75])
 print("Updated history:", pipe["Mass Flow (kg/s)"].history)'''
-
-'''from Components import Value
-
-Cd = Value.Parameter("Cd", constant=0.8)
-mdot = Value.State("Mass Flow (kg/s)", constant=2.0)
-
-# Default: enforce mdot == 5
-b1 = Balance(Cd, mdot, 5.0)
-
-# Custom: enforce Cd * mdot == 5
-b2 = Balance(Cd, mdot, 5.0, residual_fn=lambda indep, x, y: indep * x - y)
-
-print(b1.residual())  # 2.0 - 5.0 = -3.0
-print(b2.residual())  # 0.8 * 2.0 - 5.0 = -3.4'''
