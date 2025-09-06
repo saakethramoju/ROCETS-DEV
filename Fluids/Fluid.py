@@ -10,7 +10,7 @@ class Fluid:
     def __init__(
         self,
         fluid: Union[str, Dict[str, float]],   # str = pure fluid, dict = mixture
-        basis: str = "mole",                   # 'mole' or 'mass'
+        basis: str = "mass",                   # 'mole' or 'mass'
         P: float = None,
         h: float = None,
         T: float = None,
@@ -83,19 +83,21 @@ class Fluid:
         else:
             raise LookupError("Please provide at least two thermodynamic properties!")
         
-    
+        self.set_pyfluid()
+            
+    def set_pyfluid(self):
         if self._mixture:
             st = pyMixture([pyFluidsList[f] for f in self._fluids],
                                     self._mass_fractions)
             T, Q = Fluid.get_temperature_and_quality(st, self._P, self._h)
-            if Q != 1.0 or Q != 0.0:
+            if 0.0 < Q < 1.0:  # strictly inside dome
                 self._pyfluid = st.with_state(pyInput.quality(Q), pyInput.pressure(self._P))
-            else:
+            else:  # subcooled or superheated, use T
                 self._pyfluid = st.with_state(pyInput.temperature(T), pyInput.pressure(self._P))
         else:
             self._pyfluid = pyFluid(pyFluidsList[self._fluids[0]]).with_state(pyInput.pressure(self._P), pyInput.enthalpy(self._h))
 
-            
+
     @property
     def species(self):
         return self._fluids
@@ -108,6 +110,19 @@ class Fluid:
             for f, x in zip(self._fluids, self._mole_fractions)
         }
 
+    @mole_fractions.setter
+    def mole_fractions(self, value:List):
+        if len(self._fluids) == 1:
+            print("Cannot change mole fractions for a pure fluid!")
+        else:
+            if not np.isclose(sum(value), 1.0, atol=1e-6): raise ValueError("Mole fractions must sum to 1.0")
+            self._mole_fractions = np.array(value, dtype=float)
+            self._mass_fractions = Fluid.mole_to_mass(self._fluids, value)
+            if self._P is not None and self._h is not None:
+                self.set_pyfluid()
+            else:
+                raise ValueError("Cannot update fractions without known P and h.")
+
     @property
     def mass_fractions(self) -> dict:
         """Mass fractions as {fluid_name: value}"""
@@ -117,15 +132,61 @@ class Fluid:
             for f, x in zip(self._fluids, mf)
         }
     
+    @mass_fractions.setter
+    def mass_fractions(self, value:List):
+        if len(self._fluids) == 1:
+            print("Cannot change mass fractions for a pure fluid!")
+        else:
+            if not np.isclose(sum(value), 1.0, atol=1e-6): raise ValueError("Mass fractions must sum to 1.0")
+            self._mole_fractions = Fluid.mass_to_mole(self._fluids, value)
+            self._mass_fractions = np.array(value, dtype=float)
+            if self._P is not None and self._h is not None:
+                self.set_pyfluid()
+            else:
+                raise ValueError("Cannot update fractions without known P and h.")
+    
     @property
     def pressure(self) -> float:
         """Absolute pressure (Pa)"""
         return self._P
     
+    @pressure.setter
+    def pressure(self, value: float):
+        """Update pressure (Pa) and rebuild the fluid state."""
+        self._P = value
+        if self._h is not None:
+            self.set_pyfluid()
+        else:
+            raise ValueError("Cannot update pressure without a known enthalpy (or another state variable).")
+    
     @property
     def enthalpy(self) -> float:
         """Mass specifc enthalpy (J/kg)"""
         return self._h
+    
+    @enthalpy.setter
+    def enthalpy(self, value: float):
+        """Update enthalpy (J/kg) and rebuild the fluid state."""
+        self._h = value    
+        if self._P is not None:
+            self.set_pyfluid()
+        else:
+            raise ValueError("Cannot update enthalpy without a known pressure (or another state variable).")
+        
+    @property
+    def HP(self) -> Tuple[float, float]:
+        """Return (pressure [Pa], enthalpy [J/kg])"""
+        return self._P, self._h
+
+    @HP.setter
+    def HP(self, values: Tuple[float, float]):
+        """Set pressure [Pa] and enthalpy [J/kg] at once and rebuild the state"""
+        if not isinstance(values, (tuple, list)) or len(values) != 2:
+            raise ValueError("HP must be set with a tuple/list of (P, h)")
+
+        self._h, self._P = values
+        self.set_pyfluid()
+
     
     @property
     def temperature(self) -> float:
@@ -328,30 +389,39 @@ class Fluid:
         inv = mass_fractions / molar_masses
         return inv / inv.sum()
     
-
     @staticmethod
-    def get_temperature_and_quality(fluid: pyFluid, P:float, target_enthalpy:float) -> Tuple[str]:
+    def get_temperature_and_quality(fluid: pyFluid, P: float, target_enthalpy: float) -> Tuple[float, float]:
+        """Return (T, Q) given a fluid object, pressure, and enthalpy."""
         h_liquid = fluid.with_state(pyInput.quality(0), pyInput.pressure(P)).enthalpy
-        h_vapor = fluid.with_state(pyInput.quality(1), pyInput.pressure(P)).enthalpy
+        h_vapor  = fluid.with_state(pyInput.quality(1), pyInput.pressure(P)).enthalpy
         h = target_enthalpy
+
+        # Inside two-phase region → interpolate directly
         if h_liquid <= h <= h_vapor:
             Q = (h - h_liquid) / (h_vapor - h_liquid)
             T = fluid.with_state(pyInput.quality(Q), pyInput.pressure(P)).temperature
-        else:
-            def residual(T):
-                try:
-                    st = fluid.with_state(pyInput.temperature(T), pyInput.pressure(P))
-                    return st.enthalpy - h
-                except:
-                    return 1e13
-            
-            min_temp = fluid.min_temperature
-            max_temp = fluid.max_temperature
+            return T, Q
 
-            sol = root_scalar(residual, method='brentq', bracket=[min_temp, max_temp])
-            T = sol.root
-            Q = 1.0 if h >= h_vapor else 0.0
+        # Single-phase region → invert enthalpy to find T
+        def residual(T):
+            try:
+                st = fluid.with_state(pyInput.temperature(T), pyInput.pressure(P))
+                return st.enthalpy - h
+            except Exception:
+                return 1e13
+
+        # Narrow bracket around realistic range
+        Tmin = max(fluid.min_temperature, 50.0)  # avoid singularities
+        Tmax = fluid.max_temperature
+
+        sol = root_scalar(residual, method='brentq', bracket=[Tmin, Tmax])
+        if not sol.converged:
+            raise ValueError(f"Failed to find temperature for h={h} at P={P}")
+
+        T = sol.root
+        Q = 0.0 if h < h_liquid else 1.0 
         return T, Q
+
 
 
     @staticmethod
@@ -412,12 +482,16 @@ class Fluid:
 if __name__ == "__main__":
 
 
-    #f = Fluid({"Nitrogen": 0.79, "Oxygen": 0.11, "Methane": 0.1}, basis="mass", P=101325, h=3e7)
+    f = Fluid({"Nitrogen": 0.78, "Oxygen": 0.21, "Argon": 0.01}, basis="mole", P=101325, T=298.15)
     #f = Fluid({"Nitrogen": 1}, P=101325, h=311200)
     #f = Fluid("Methane", P=3e6, Q=0.1)
-    f = Fluid("nDodecane", P=101325, T=300)
+    #f = Fluid("nDodecane", P=101325, T=300)
     print(f)
-    #ADD A WAY TO UPDATE THE FLUIDS
+    #f.HP = 3.1e5, 2e5
+    #f.mass_fractions = [0.4, 0.3, 0.3]
+    print("-------------------")
+    f = Fluid("Air", P=101325, T=298.15)
+    print(f)
     #Fluid.show_available_fluids()
     #print(Fluid.get_saturation_pressure({"Nitrogen": 0.79, "Oxygen": 0.11, "Methane": 0.1}, T=120))
 
