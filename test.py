@@ -33,7 +33,12 @@ class Pipe(Component):
         dp = self["Source"].fluid.P - self["Drain"].fluid.P
         mdot = np.sign(dp) * np.sqrt(rho * np.abs(dp) / R)
         self["Mass Flow (kg/s)"](mdot)
-        return mdot
+
+        f = self["Source"].fluid
+        f.HP = self["Drain"].fluid.enthalpy_mass, self["Drain"].fluid.P
+        self["Drain"].fluid = f
+
+        return 0
 
 
     def transient(self, damping_strong=2.0, eps=200.0):
@@ -75,8 +80,7 @@ class Tank(Component):
     fluid_keys = ["Ullage",
                   "Bulk"] # take input for fluid only if Junction
 
-    component_type = ComponentType.JUNCTION
-
+    component_type = ComponentType.SOURCE
 
     def steady_state(self):
 
@@ -92,10 +96,29 @@ class Tank(Component):
         self["Bulk"]().TP = T, P_eff
         self["Drain"].fluid = self["Bulk"]()
         self["Effective Pressure (Pa)"](P_eff)
-        self["Effective Enthalpy (J/kg)"](self["Drain"].fluid.enthalpy_mass)
+        self["Effective Enthalpy (J/kg)"](self ["Drain"].fluid.enthalpy_mass)
         self["Fluid Height (m)"](h)
         self["Fluid Volume (m^3)"](V)
-        return P_eff
+        return 0
+
+
+class Volume(Component): 
+
+    configuration_keys = ["Volume (m^3)"]
+    state_keys = ["Mass (kg)",
+                  "Pressure (Pa)",
+                  "Enthalpy (J/kg)"]
+    inflow_keys = ["In"]
+    outflow_keys = ["Out"]
+    fluid_keys = ["Fluid"]
+
+    component_type = ComponentType.JUNCTION
+
+    iteration_keys = ["Pressure (Pa)",
+                      "Enthalpy (J/kg)"]
+
+    def steady_state(self):
+        self["Fluid"]()
 
 
 
@@ -127,11 +150,13 @@ pipe["Cross-sectional Area (sq. m.)"] = 5.1e-4
 #pipe["Cross-sectional Area (sq. m.)"] = (t, A)
 pipe["Length (m)"] = 0.5 
 
+
 #print(tank.steady_state())
-#print(pipe.steady_state())
+print(pipe.steady_state())
 
 
-t_start = 0
+
+'''t_start = 0
 dt = 0.01
 t_end = 1
 
@@ -157,7 +182,7 @@ plt.title("Transient Mass Flow (kg/s)")
 plt.ylabel("Mass Flow (kg/s)")
 plt.xlabel("Time (s)")
 plt.legend()
-plt.show()
+plt.show()'''
 
 
 

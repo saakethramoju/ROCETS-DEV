@@ -25,7 +25,7 @@ class FlowPort:
             fluid.TP = T, P
 
         self._fluid = fluid
-        self._mass_flow = None  # default
+        self._mass_flow = 0  # default
 
         self.parent = parent
         self.connection = None

@@ -3,7 +3,7 @@ from typing import List, Dict, Optional, TYPE_CHECKING, Union
 from prettytable import PrettyTable
 from Ports import InFlow, OutFlow
 from .ComponentType import ComponentType
-from .Value import State, Parameter, Fluid
+from .Value import State, Parameter, Substance
 
 
 if TYPE_CHECKING:
@@ -19,9 +19,11 @@ class Component:
     state_keys: List[str] = []
     inflow_keys: List[str] = []
     outflow_keys: List[str] = [] 
-    fluid_keys: List[str] = [] 
+    substance_keys: List[str] = [] 
 
     component_type: ComponentType = ComponentType.FLOW
+
+    iteration_keys: List[str] = []
 
     def __init__(
         self,
@@ -34,12 +36,12 @@ class Component:
         self.outflows: List[OutFlow] = []
         self._states: Dict[str, State] = {}
         self._parameters: Dict[str, Parameter] = {}
-        self._fluids: Dict[str, Fluid] = {}
+        self._substances: Dict[str, Substance] = {}
 
         self._initialize_default_ports()
         self._initialize_default_states()
         self._initialize_configuration()
-        self._initialize_default_fluids()
+        self._initialize_default_substances()
 
 
     # -----------------------------
@@ -78,21 +80,21 @@ class Component:
         return list(self._states.keys())
     
     # -----------------------------
-    # Fluids
+    # Substances
     # -----------------------------
-    def _initialize_default_fluids(self):
-        for key in self.fluid_keys:
-            self.add_fluid(key)
+    def _initialize_default_substances(self):
+        for key in self.substance_keys:
+            self.add_substance(key)
 
-    def add_fluid(self, name: str, initial=None):
-        if name in self._fluids:
-            raise ValueError(f"Fluid '{name}' already exists in {self.name}")
-        self._fluids[name] = Fluid(name, initial)
-        return self._fluids[name]
+    def add_substance(self, name: str, initial=None):
+        if name in self._substances:
+            raise ValueError(f"Substance '{name}' already exists in {self.name}")
+        self._substances[name] = Substance(name, initial)
+        return self._substances[name]
 
     @property
-    def fluids(self):
-        return list(self._fluids.keys())
+    def substances(self):
+        return list(self._substances.keys())
 
     # -----------------------------
     # Add inflow/outflow (factory style)
@@ -196,11 +198,11 @@ class Component:
             return self._parameters[match[0]]
         return None
 
-    def _fuzzy_find_fluid(self, name: str) -> Optional[Fluid]:   # NEW
-        candidates = list(self._fluids.keys())
+    def _fuzzy_find_substance(self, name: str) -> Optional[Substance]:   # NEW
+        candidates = list(self._substances.keys())
         match = difflib.get_close_matches(name, candidates, n=1, cutoff=0.6)
         if match:
-            return self._fluids[match[0]]
+            return self._substances[match[0]]
         return None
 
     # -----------------------------
@@ -216,15 +218,15 @@ class Component:
         param = self._fuzzy_find_parameter(key)
         if param:
             return param
-        # Fluids
-        fluid = self._fuzzy_find_fluid(key)
-        if fluid:
-            return fluid
+        # Substances
+        substance = self._fuzzy_find_substance(key)
+        if substance:
+            return substance
         # Ports
         port = self._fuzzy_find_port(key)
         if port:
             return port
-        raise KeyError(f"No state, parameter, fluid, or port found for '{key}' in {self.name}")
+        raise KeyError(f"No state, parameter, substance, or port found for '{key}' in {self.name}")
 
 
     def __setitem__(self, key: str, value):
@@ -238,10 +240,10 @@ class Component:
         if param:
             param.set(value)
             return
-        # Fluids
-        fluid = self._fuzzy_find_fluid(key)
-        if fluid:
-            fluid.set(value)
+        # Substances
+        substance = self._fuzzy_find_substance(key)
+        if substance:
+            substance.set(value)
             return
         # Ports
         port = self._fuzzy_find_port(key)
@@ -253,7 +255,7 @@ class Component:
             else:
                 raise TypeError("Value must be a Cantera fluid, a number (mass flow), or None.")
             return
-        raise KeyError(f"No state, parameter, fluid, or port found for '{key}' in {self.name}")
+        raise KeyError(f"No state, parameter, substance, or port found for '{key}' in {self.name}")
 
     # -----------------------------
     # Equality & hashing (needed for set operations in System)
@@ -317,3 +319,9 @@ class Component:
             f"Component '{self.name}' (Type: {self.component_type.name}, Parent: {parent_name})\n"
             f"{table}"
         )
+
+    def steady_state(self):
+        return 0
+    
+    def transient(self):
+        return 0

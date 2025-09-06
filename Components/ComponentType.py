@@ -7,8 +7,9 @@ class ComponentType(Enum):
     Enumeration of different component types in the fluid network.
     """
 
-    FLOW = auto()
+    FLOW     = auto()
     JUNCTION = auto()
+    SOURCE   = auto()
 
     def __str__(self):
         return self.name

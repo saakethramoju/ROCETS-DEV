@@ -131,7 +131,7 @@ class Parameter(Value):
             raise TypeError("Parameter must be numeric")
 
 
-class Fluid(Value):
+class Substance(Value):
     def set(self, data):
         def check(val):
             if not isinstance(val, ct._cantera.ThermoPhase):
