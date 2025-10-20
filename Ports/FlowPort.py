@@ -1,5 +1,4 @@
-import cantera as ct
-from ambiance import Atmosphere
+from Fluids import Fluid
 from .Exceptions import (
     AlreadyConnectedError,
     InvalidConnectionError,
@@ -12,21 +11,19 @@ class FlowPort:
     """
     Base class for a flow connection point carrying a Cantera fluid.
     """
-
-    _id_counter = 0  # for default naming
+    _default_fluid = Fluid("Water", P=101325, T=288.15)
+    _id_counter = 0
+    _instances = []   # track all ports
 
     def __init__(self, name=None, fluid=None, parent=None):
-        # Default fluid: Water at 293.15 K and 1 atm
         if fluid is None:
-            fluid = ct.Water()
-            atm = Atmosphere(h=0)
-            P = atm.pressure[0]
-            T = atm.temperature[0]
-            fluid.TP = T, P
+            self._fluid = FlowPort._default_fluid
+            self._using_default = True
+        else:
+            self._fluid = fluid
+            self._using_default = False
 
-        self._fluid = fluid
-        self._mass_flow = 0  # default
-
+        self._mass_flow = 0
         self.parent = parent
         self.connection = None
 
@@ -35,6 +32,28 @@ class FlowPort:
         else:
             FlowPort._id_counter += 1
             self.name = f"FlowPort_{FlowPort._id_counter}"
+
+        FlowPort._instances.append(self)
+
+    # -----------------------------
+    # Class-level default setter
+    # -----------------------------
+    @classmethod
+    def set_default_fluid(cls, fluid: Fluid):
+        """Update global default and propagate to ports still using default."""
+        if not isinstance(fluid, Fluid):
+            raise TypeError(f"Default fluid must be a Fluid instance, got {type(fluid)}")
+
+        cls._default_fluid = fluid
+        for port in cls._instances:
+            if port._using_default:
+                port._fluid = fluid
+
+
+    @classmethod
+    def get_default_fluid(cls):
+        """Return the current default fluid."""
+        return cls._default_fluid
 
     # -----------------------------
     # Fluid property
@@ -45,12 +64,14 @@ class FlowPort:
 
     @fluid.setter
     def fluid(self, value):
-        if value is not None and not isinstance(value, ct.ThermoPhase):
-            raise FluidTypeError(value)
+        if not isinstance(value, Fluid):
+            raise TypeError(f"Expected Fluid, got {type(value)}")
         self._fluid = value
-        # propagate update if connected
+        self._using_default = False   # user explicitly set fluid
         if self.connection:
             self.connection._fluid = value
+            self.connection._using_default = False
+
 
     # -----------------------------
     # Mass flow property
@@ -118,7 +139,7 @@ class FlowPort:
     def __str__(self):
         parent_name = self.parent.__class__.__name__ if self.parent else "None"
         conn_name = self.connection.name if self.connection else "None"
-        fluid_name = self.fluid.name if self.fluid else "None"
+        fluid_name = ", ".join(self.fluid.species) if self.fluid else "None"
         return (
             f"{self.__class__.__name__} '{self.name}'\n"
             f"  Parent: {parent_name}\n"

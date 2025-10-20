@@ -4,6 +4,7 @@ from prettytable import PrettyTable
 from Ports import InFlow, OutFlow
 from .ComponentType import ComponentType
 from .Value import State, Parameter, Substance
+from Fluids import Fluid
 
 
 if TYPE_CHECKING:
@@ -248,12 +249,12 @@ class Component:
         # Ports
         port = self._fuzzy_find_port(key)
         if port:
-            if hasattr(value, "TP"):  # Cantera fluid
+            if isinstance(value, Fluid):   # <-- use your wrapper class
                 port.fluid = value
             elif isinstance(value, (int, float)) or value is None:
                 port.mass_flow = value
             else:
-                raise TypeError("Value must be a Cantera fluid, a number (mass flow), or None.")
+                raise TypeError("Value must be a Fluid, a number (mass flow), or None.")
             return
         raise KeyError(f"No state, parameter, substance, or port found for '{key}' in {self.name}")
 
@@ -293,11 +294,10 @@ class Component:
             conn_port = port.connection.name if port.connection else "None"
 
             fluid = port.fluid
-            fluid_name = fluid.name if fluid else "None"
-            T = f"{fluid.T:.2f}" if fluid else "None"
-            P = f"{fluid.P:.1f}" if fluid else "None"
-            Q = getattr(fluid, "Q", None)
-            Q = f"{Q:.2f}" if Q is not None else "N/A"
+            fluid_name = ", ".join(fluid.species) if fluid else "None"
+            T = f"{fluid.temperature:.2f}" if fluid else "None"
+            P = f"{fluid.pressure:.1f}" if fluid else "None"
+            Q = f"{fluid.quality:.2f}" if fluid else "N/A"
 
             m_dot = f"{port.mass_flow:.4f}" if port.mass_flow is not None else "None"
 

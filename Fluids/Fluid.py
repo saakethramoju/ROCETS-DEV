@@ -6,348 +6,414 @@ from scipy.optimize import root_scalar
 from typing import List, Union, Dict, Tuple
 import numpy as np
 
+
 class Fluid:
+    """
+    High-level wrapper around pyfluids Fluid/Mixture objects with added
+    convenience methods for initialization, state updates, and property access.
+
+    Supports both pure fluids and mixtures (by mole or mass fractions).
+    """
+
+    _ALIASES = {
+        "rp-1": "nDodecane",
+        "rp1": "nDodecane",
+        "jet-a": "nDodecane",
+        "jeta": "nDodecane",
+        "kerosene": "nDodecane",
+    }
+
     def __init__(
         self,
-        fluid: Union[str, Dict[str, float]],   # str = pure fluid, dict = mixture
-        basis: str = "mass",                   # 'mole' or 'mass'
+        fluid: Union[str, Dict[str, float]],
+        basis: str = "mass",
         P: float = None,
         h: float = None,
         T: float = None,
-        Q: float = None
+        Q: float = None,
     ):
-        
+        """
+        Initialize a Fluid state.
+
+        Parameters
+        ----------
+        fluid : str or dict
+            Pure fluid name (str) or dictionary of {fluid_name: fraction}.
+        basis : str
+            "mole" or "mass" basis for mixture fractions (default "mass").
+        P : float, optional
+            Absolute pressure in Pa.
+        h : float, optional
+            Specific enthalpy in J/kg.
+        T : float, optional
+            Absolute temperature in K.
+        Q : float, optional
+            Vapor quality (0-1).
+        """
         valid_fluids = Fluid.get_available_fluids()
 
+        self._fluids: List[str] = []          # backend names (e.g., nDodecane)
+        self._display_names: List[str] = []   # user-facing names (e.g., RP-1)
+
+        # -------------------------------
+        # Handle pure fluid input
+        # -------------------------------
         if isinstance(fluid, str):
-            if fluid not in valid_fluids:
-                raise ValueError(f"Invalid fluid '{fluid}'. Use Fluid.show_available_fluids() to check valid fluid names.")
-        elif isinstance(fluid, dict):
-            for f in fluid.keys():
-                if f not in valid_fluids:
-                    raise ValueError(f"Invalid fluid '{fluid}'. Use Fluid.show_available_fluids() to check valid fluid names.")
-        else:
-            raise TypeError("fluid must be either string (pure) or dictionary (mixture)")
-        
-        if isinstance(fluid, str):
-            self._fluids = [fluid]
+            backend, display = Fluid._normalize_name(fluid)
+            if backend not in valid_fluids:
+                raise ValueError(
+                    f"Invalid fluid '{fluid}'. "
+                    f"Use Fluid.show_available_fluids() to check valid names."
+                )
+            self._fluids = [backend]
+            self._display_names = [display]
             self._mole_fractions = np.array([1.0])
             self._mass_fractions = np.array([1.0])
-        elif isinstance(fluid, dict):
-            self._fluids = list(fluid.keys())
-            fractions = list(fluid.values())
-            if basis == "mole":
-                self._mole_fractions = np.array(fractions, dtype=float)
-                self._mass_fractions = Fluid.mole_to_mass(self._fluids, fractions)
-            elif basis == "mass":
-                self._mole_fractions = Fluid.mass_to_mole(self._fluids, fractions)
-                self._mass_fractions = np.array(fractions, dtype=float)
-            else:
-                raise ValueError("basis must be 'mole' or 'mass'!")
-        else:
-            raise TypeError("fluid must be either string (pure) or dictionary (mixture)")
-        
-        if len(self._fluids) > 1:
-            self._mixture = True
-        else:
             self._mixture = False
-                
 
+        # -------------------------------
+        # Handle mixture input
+        # -------------------------------
+        elif isinstance(fluid, dict):
+            # ---- Single-component dict case ----
+            if len(fluid) == 1:
+                f, frac = next(iter(fluid.items()))
+                if not np.isclose(frac, 1.0, atol=1e-12):
+                    raise ValueError(f"Single-component dict must have fraction = 1.0, got {frac}")
+                backend, display = Fluid._normalize_name(f)
+                if backend not in valid_fluids:
+                    raise ValueError(
+                        f"Invalid fluid '{f}'. "
+                        f"Use Fluid.show_available_fluids() to check valid names."
+                    )
+                self._fluids = [backend]
+                self._display_names = [display]
+                self._mole_fractions = np.array([1.0])
+                self._mass_fractions = np.array([1.0])
+                self._mixture = False
+
+            # ---- True mixture ----
+            else:
+                tmp: Dict[str, Tuple[float, List[str]]] = {}
+                for user_name, frac in fluid.items():
+                    backend, display = Fluid._normalize_name(user_name)
+                    if backend not in valid_fluids:
+                        raise ValueError(
+                            f"Invalid fluid '{user_name}' (backend '{backend}' not found). "
+                            f"Use Fluid.show_available_fluids() to check valid names."
+                        )
+                    total, names = tmp.get(backend, (0.0, []))
+                    tmp[backend] = (total + float(frac), names + [display])
+
+                self._fluids = list(tmp.keys())
+                fractions = np.array([v[0] for v in tmp.values()], dtype=float)
+                self._display_names = [
+                    ", ".join(sorted(set(names))) for (_, names) in tmp.values()
+                ]
+
+                if basis == "mole":
+                    if not np.isclose(fractions.sum(), 1.0, atol=1e-6):
+                        raise ValueError("Mole fractions must sum to 1.0")
+                    self._mole_fractions = fractions
+                    self._mass_fractions = Fluid.mole_to_mass(self._fluids, fractions)
+                elif basis == "mass":
+                    if not np.isclose(fractions.sum(), 1.0, atol=1e-6):
+                        raise ValueError("Mass fractions must sum to 1.0")
+                    self._mass_fractions = fractions
+                    self._mole_fractions = Fluid.mass_to_mole(self._fluids, fractions)
+                else:
+                    raise ValueError("basis must be 'mole' or 'mass'")
+                self._mixture = len(self._fluids) > 1
+
+        else:
+            raise TypeError("fluid must be a string (pure) or dict (mixture)")
+
+        # -------------------------------
+        # Build pyfluids backend
+        # -------------------------------
+        self._backend = (
+            pyMixture([pyFluidsList[f] for f in self._fluids], self._mass_fractions)
+            if self._mixture else pyFluid(pyFluidsList[self._fluids[0]])
+        )
+
+        # -------------------------------
+        # Initialize state
+        # -------------------------------
         if P is not None and h is not None:
             self._P, self._h = P, h
-
         elif P is not None and T is not None:
             self._P = P
-            if self._mixture:
-                st = pyMixture([pyFluidsList[f] for f in self._fluids], self._mass_fractions)
-            else:
-                st = pyFluid(pyFluidsList[self._fluids[0]])
-            self._h = st.with_state(pyInput.temperature(T), pyInput.pressure(P)).enthalpy
-
+            self._h = self._backend.with_state(pyInput.temperature(T), pyInput.pressure(P)).enthalpy
         elif P is not None and Q is not None:
             self._P = P
-            if self._mixture:
-                st = pyMixture([pyFluidsList[f] for f in self._fluids], self._mass_fractions)
-            else:
-                st = pyFluid(pyFluidsList[self._fluids[0]])
-            self._h = st.with_state(pyInput.quality(Q), pyInput.pressure(P)).enthalpy
-
+            self._h = self._backend.with_state(pyInput.quality(Q), pyInput.pressure(P)).enthalpy
         elif T is not None and Q is not None:
-            if self._mixture:
-                st = pyMixture([pyFluidsList[f] for f in self._fluids], self._mass_fractions)
-            else:
-                st = pyFluid(pyFluidsList[self._fluids[0]])
-            self._P = st.with_state(pyInput.quality(Q), pyInput.temperature(T)).pressure
-            self._h = st.with_state(pyInput.quality(Q), pyInput.temperature(T)).enthalpy
-
+            st = self._backend.with_state(pyInput.quality(Q), pyInput.temperature(T))
+            self._P, self._h = st.pressure, st.enthalpy
         else:
             raise LookupError("Please provide at least two thermodynamic properties!")
-        
+
         self.set_pyfluid()
-            
+
+
+    # ---------------- Core ---------------- #
     def set_pyfluid(self):
+        """Rebuild backend pyfluid state using current P and h."""
         if self._mixture:
-            st = pyMixture([pyFluidsList[f] for f in self._fluids],
-                                    self._mass_fractions)
-            T, Q = Fluid.get_temperature_and_quality(st, self._P, self._h)
-            if 0.0 < Q < 1.0:  # strictly inside dome
-                self._pyfluid = st.with_state(pyInput.quality(Q), pyInput.pressure(self._P))
-            else:  # subcooled or superheated, use T
-                self._pyfluid = st.with_state(pyInput.temperature(T), pyInput.pressure(self._P))
+            T, Q = Fluid.get_temperature_and_quality(self._backend, self._P, self._h)
+            if 0.0 < Q < 1.0:  # inside dome
+                self._pyfluid = self._backend.with_state(pyInput.quality(Q), pyInput.pressure(self._P))
+            else:  # single-phase
+                self._pyfluid = self._backend.with_state(pyInput.temperature(T), pyInput.pressure(self._P))
         else:
-            self._pyfluid = pyFluid(pyFluidsList[self._fluids[0]]).with_state(pyInput.pressure(self._P), pyInput.enthalpy(self._h))
+            self._pyfluid = self._backend.with_state(pyInput.pressure(self._P), pyInput.enthalpy(self._h))
 
-
-    @property
-    def species(self):
-        return self._fluids
-
+    # ---------------- Fractions ---------------- #
     @property
     def mole_fractions(self) -> dict:
-        """Mole fractions as {fluid_name: value}"""
-        return {
-            f: float(x) 
-            for f, x in zip(self._fluids, self._mole_fractions)
-        }
+        """Return mole fractions as {fluid_name: value}."""
+        return {f: float(x) for f, x in zip(self._fluids, self._mole_fractions)}
 
     @mole_fractions.setter
-    def mole_fractions(self, value:List):
+    def mole_fractions(self, value: List[float]):
+        """Update mole fractions (must sum to 1)."""
         if len(self._fluids) == 1:
-            print("Cannot change mole fractions for a pure fluid!")
-        else:
-            if not np.isclose(sum(value), 1.0, atol=1e-6): raise ValueError("Mole fractions must sum to 1.0")
-            self._mole_fractions = np.array(value, dtype=float)
-            self._mass_fractions = Fluid.mole_to_mass(self._fluids, value)
-            if self._P is not None and self._h is not None:
-                self.set_pyfluid()
-            else:
-                raise ValueError("Cannot update fractions without known P and h.")
+            raise ValueError("Cannot change mole fractions for a pure fluid")
+        if not np.isclose(sum(value), 1.0, atol=1e-6):
+            raise ValueError("Mole fractions must sum to 1.0")
+        self._mole_fractions = np.array(value, dtype=float)
+        self._mass_fractions = Fluid.mole_to_mass(self._fluids, value)
+        self._backend = pyMixture([pyFluidsList[f] for f in self._fluids], self._mass_fractions)
+        if self._P is not None and self._h is not None:
+            self.set_pyfluid()
 
     @property
     def mass_fractions(self) -> dict:
-        """Mass fractions as {fluid_name: value}"""
-        mf = Fluid.mole_to_mass(self._fluids, self._mole_fractions)
-        return {
-            f: float(x) 
-            for f, x in zip(self._fluids, mf)
-        }
-    
+        """Return mass fractions as {fluid_name: value}."""
+        return {f: float(x) for f, x in zip(self._fluids, self._mass_fractions)}
+
     @mass_fractions.setter
-    def mass_fractions(self, value:List):
+    def mass_fractions(self, value: List[float]):
+        """Update mass fractions (must sum to 1)."""
         if len(self._fluids) == 1:
-            print("Cannot change mass fractions for a pure fluid!")
-        else:
-            if not np.isclose(sum(value), 1.0, atol=1e-6): raise ValueError("Mass fractions must sum to 1.0")
-            self._mole_fractions = Fluid.mass_to_mole(self._fluids, value)
-            self._mass_fractions = np.array(value, dtype=float)
-            if self._P is not None and self._h is not None:
-                self.set_pyfluid()
-            else:
-                raise ValueError("Cannot update fractions without known P and h.")
-    
+            raise ValueError("Cannot change mass fractions for a pure fluid")
+        if not np.isclose(sum(value), 1.0, atol=1e-6):
+            raise ValueError("Mass fractions must sum to 1.0")
+        self._mass_fractions = np.array(value, dtype=float)
+        self._mole_fractions = Fluid.mass_to_mole(self._fluids, value)
+        self._backend = pyMixture([pyFluidsList[f] for f in self._fluids], self._mass_fractions)
+        if self._P is not None and self._h is not None:
+            self.set_pyfluid()
+
+    # ---------------- State setters ---------------- #
     @property
     def pressure(self) -> float:
-        """Absolute pressure (Pa)"""
+        """Absolute pressure (Pa)."""
         return self._P
-    
+
     @pressure.setter
     def pressure(self, value: float):
-        """Update pressure (Pa) and rebuild the fluid state."""
         self._P = value
         if self._h is not None:
             self.set_pyfluid()
-        else:
-            raise ValueError("Cannot update pressure without a known enthalpy (or another state variable).")
-    
+
     @property
     def enthalpy(self) -> float:
-        """Mass specifc enthalpy (J/kg)"""
+        """Mass-specific enthalpy (J/kg)."""
         return self._h
-    
+
     @enthalpy.setter
     def enthalpy(self, value: float):
-        """Update enthalpy (J/kg) and rebuild the fluid state."""
-        self._h = value    
+        self._h = value
         if self._P is not None:
             self.set_pyfluid()
-        else:
-            raise ValueError("Cannot update enthalpy without a known pressure (or another state variable).")
-        
+
     @property
     def HP(self) -> Tuple[float, float]:
-        """Return (pressure [Pa], enthalpy [J/kg])"""
+        """Return (P [Pa], h [J/kg])."""
         return self._P, self._h
 
     @HP.setter
     def HP(self, values: Tuple[float, float]):
-        """Set pressure [Pa] and enthalpy [J/kg] at once and rebuild the state"""
+        """Update pressure and enthalpy simultaneously."""
         if not isinstance(values, (tuple, list)) or len(values) != 2:
-            raise ValueError("HP must be set with a tuple/list of (P, h)")
-
-        self._h, self._P = values
+            raise ValueError("HP must be set with (P, h)")
+        self._P, self._h = values
         self.set_pyfluid()
 
+    # ---------------- Thermo properties ---------------- #
+    @property
+    def species(self) -> List[str]:
+        return self._display_names
     
     @property
     def temperature(self) -> float:
-        """Absoluate temperature (K)"""
+        """Absolute temperature (K)."""
         return self._pyfluid.temperature
-    
+
     @property
     def phase(self) -> str:
-        """CoolProp fluid phase"""
+        """
+        Thermodynamic phase name as returned by CoolProp.
+
+        Possible values:
+        - "Unknown"           : Phase could not be determined
+        - "Liquid"            : Single-phase liquid
+        - "Supercritical"     : Supercritical state (above Tc, Pc)
+        - "SupercriticalGas"  : Supercritical but more gas-like
+        - "SupercriticalLiquid": Supercritical but more liquid-like
+        - "Gas"               : Single-phase vapor/gas
+        - "TwoPhase"          : Saturated mixture of liquid + vapor
+
+        Returns
+        -------
+        str
+            Phase string reported by CoolProp backend.
+        """
         return self._pyfluid.phase.name
-    
+
+
     @property
     def compressibility(self) -> float:
-        """Compressibility factor (dimensionless)"""
+        """Compressibility factor Z = pV/RT (dimensionless)."""
         return self._pyfluid.compressibility
-    
+
     @property
     def conductivity(self) -> float:
-        """Thermal conductivity (W/m-K)"""
+        """Thermal conductivity (W/m·K)."""
         return self._pyfluid.conductivity
 
     @property
     def critical_pressure(self) -> float:
-        """Absolute pressure at the critical point (Pa)"""
+        """Critical point pressure (Pa)."""
         return self._pyfluid.critical_pressure
 
     @property
     def critical_temperature(self) -> float:
-        """Temperature at the critical point"""
+        """Critical point temperature (K)."""
         return self._pyfluid.critical_temperature
 
     @property
     def density(self) -> float:
-        """Mass density (kg/m^3)"""
+        """Mass density (kg/m³)."""
         return self._pyfluid.density
-    
+
     @property
     def dynamic_viscosity(self) -> float:
-        """Dynamic viscosity (Pa-s)"""
+        """Dynamic viscosity (Pa·s)."""
         return self._pyfluid.dynamic_viscosity
 
     @property
     def entropy(self) -> float:
-        """Mass specific entropy (J/kg-K)"""
+        """Mass-specific entropy (J/kg·K)."""
         return self._pyfluid.entropy
 
     @property
     def freezing_temperature(self) -> float:
-        """Freezing point temperature (K)"""
+        """Freezing point temperature (K)."""
         return self._pyfluid.freezing_temperature
 
     @property
     def internal_energy(self) -> float:
-        """Mass specific internal energy (J/kg)"""
+        """Mass-specific internal energy (J/kg)."""
         return self._pyfluid.internal_energy
 
     @property
     def kinematic_viscosity(self) -> float:
-        """Kinematic viscosity (m^2/s)"""
+        """Kinematic viscosity (m²/s)."""
         return self._pyfluid.kinematic_viscosity
 
     @property
-    def max_pressure(self) -> float:
-        """Maximum valid pressure (Pa)"""
+    def maximum_pressure(self) -> float:
+        """Maximum valid pressure for backend model (Pa)."""
         return self._pyfluid.max_pressure
 
     @property
-    def max_temperature(self) -> float:
-        """Maximum valid temperature (K)"""
+    def maximum_temperature(self) -> float:
+        """Maximum valid temperature for backend model (K)."""
         return self._pyfluid.max_temperature
-    
+
     @property
-    def min_pressure(self) -> float:
-        """Minimum valid pressure (Pa)"""
+    def minimum_pressure(self) -> float:
+        """Minimum valid pressure for backend model (Pa)."""
         return self._pyfluid.min_pressure
 
     @property
-    def min_temperature(self) -> float:
-        """Minimum valid temperature (K)"""
+    def minimum_temperature(self) -> float:
+        """Minimum valid temperature for backend model (K)."""
         return self._pyfluid.min_temperature
 
     @property
     def molar_mass(self) -> float:
-        """Molar mass (kg/mol)"""
+        """Molar mass (kg/mol)."""
         return self._pyfluid.molar_mass
 
     @property
     def prandtl(self) -> float:
-        """Prandtl number (dimensionless)"""
+        """Prandtl number Pr = μCp/k (dimensionless)."""
         return self._pyfluid.prandtl
-    
+
     @property
     def speed_of_sound(self) -> float:
-        """Speed of sound (m/s)"""
+        """Speed of sound (m/s)."""
         return self._pyfluid.sound_speed
 
     @property
     def specific_heat(self) -> float:
-        """Specific heat at constant pressure (J/kg-K)"""
+        """Mass-specific heat capacity at constant pressure Cp (J/kg·K)."""
         return self._pyfluid.specific_heat
 
     @property
     def specific_volume(self) -> float:
-        """Mass specific volume (m^3/kg)."""
+        """Specific volume (m³/kg)."""
         return self._pyfluid.specific_volume
 
     @property
     def surface_tension(self) -> float:
-        """Surface tension (N/m)"""
+        """Surface tension (N/m)."""
         return self._pyfluid.surface_tension
 
     @property
     def triple_pressure(self) -> float:
-        """Triple point pressure (Pa)"""
+        """Triple point pressure (Pa)."""
         return self._pyfluid.triple_pressure
-    
+
     @property
     def triple_temperature(self) -> float:
-        """Triple point temperature (K)"""
+        """Triple point temperature (K)."""
         return self._pyfluid.triple_temperature
-    
+
     @property
     def is_mixture(self) -> bool:
-        """True if the fluid is a mixture"""
+        """Return True if this fluid is a mixture, False if pure."""
         return self._mixture
-    
+
+
     @property
     def quality(self) -> float:
-        """Vapor quality (0-1)"""
-        h_liquid = self._pyfluid.with_state(pyInput.pressure(self._P), pyInput.quality(0.0)).enthalpy
-        h_vapor = self._pyfluid.with_state(pyInput.pressure(self._P), pyInput.quality(1.0)).enthalpy
-        if self._h >= h_vapor:
-            return 1.0
-        elif self._h <= h_liquid:
-            return 0.0
-        else:
-            return self._pyfluid.quality
-        
+        """Return vapor quality (0–1)."""
+        h_liquid = self._backend.with_state(pyInput.pressure(self._P), pyInput.quality(0.0)).enthalpy
+        h_vapor = self._backend.with_state(pyInput.pressure(self._P), pyInput.quality(1.0)).enthalpy
+        if self._h >= h_vapor: return 1.0
+        if self._h <= h_liquid: return 0.0
+        return self._pyfluid.quality
+
     @property
     def saturation_temperature(self) -> float:
-        """Saturation temperature for fluid's pressure (K)"""
-        try:
-            return self._pyfluid.with_state(pyInput.pressure(self._P), pyInput.quality(1.0)).temperature
-        except:
-            raise ValueError("Cannot access saturation temperature for this pressure!")
+        """Return saturation temperature (K) at current pressure."""
+        return self._backend.with_state(pyInput.pressure(self._P), pyInput.quality(1.0)).temperature
 
+    # ---------------- String output ---------------- #
     def _safe(self, value, fmt=".3e"):
-        """Return formatted value or 'N/A' if None"""
-        if value is None:
-            return "N/A"
-        try:
-            return f"{value:{fmt}}"
-        except Exception:
-            return str(value)
+        if value is None: return "N/A"
+        try: return f"{value:{fmt}}"
+        except Exception: return str(value)
 
     def __str__(self):
         def format_dict(d: dict, decimals=3):
             return {k: round(v, decimals) for k, v in d.items()}
-
         rows = [
-            ("Fluid(s)", ", ".join(self._fluids)),
+            ("Fluid(s)", ", ".join(self._display_names)),
             ("Mole fractions", format_dict(self.mole_fractions, 3)),
             ("Mass fractions", format_dict(self.mass_fractions, 3)),
             ("Phase", self.phase),
@@ -363,119 +429,90 @@ class Fluid:
             ("Saturation temperature [K]", self._safe(self.saturation_temperature, ".2f")),
             ("Molar mass [kg/mol]", self._safe(self.molar_mass, ".6f")),
         ]
-
         width = max(len(r[0]) for r in rows)
         return "\n".join(f"{key:<{width}} : {val}" for key, val in rows)
+    
+    def __repr__(self) -> str:
+        """
+        Representation of the Fluid object.
 
+        Includes class name, species, pressure, enthalpy, and temperature.
+        Useful for debugging, logging, or interactive sessions.
 
-       
+        Returns
+        -------
+        str
+            String in the format:
+            Fluid(species=['Nitrogen', 'Oxygen'], P=101325 Pa, h=2.98e+05 J/kg, T=298.15 K)
+        """
+        species_str = ", ".join(self._display_names)
+        return (f"{self.__class__.__name__}(species=[{species_str}], "
+                f"P={self._P:.3e} Pa, h={self._h:.3e} J/kg, T={self.temperature:.2f} K)")
 
-    # ---- Static utilities ---- #
+    # ---------------- Utilities ---------------- #
+
+    @staticmethod
+    def _normalize_name(user_name: str) -> Tuple[str, str]:
+        """
+        Return (backend_name, display_name). If user_name is an alias,
+        map to nDodecane for backend but keep user_name for display.
+        """
+        display = user_name  # keep exactly what the user typed
+        key = user_name.strip().lower()
+        key = key.replace(" ", "")    # remove spaces
+        key = key.replace("_", "-")   # unify underscores to dashes
+        backend = Fluid._ALIASES.get(key, user_name)
+        return backend, display
+
+    
+
     @staticmethod
     def mole_to_mass(fluids: List[str], mole_fractions: List[float]):
-        if not np.isclose(sum(mole_fractions), 1.0, atol=1e-6):
-            raise ValueError("Mole fractions must sum to 1.0")
-        mole_fractions = np.asarray(mole_fractions, dtype=float)
+        """Convert mole fractions → mass fractions."""
+        if not np.isclose(sum(mole_fractions), 1.0, atol=1e-6): raise ValueError("Mole fractions must sum to 1.0")
         molar_masses = np.array([pyFluid(pyFluidsList[f]).molar_mass for f in fluids])
         m_bar = np.dot(mole_fractions, molar_masses)
-        return mole_fractions * molar_masses / m_bar
+        return np.asarray(mole_fractions) * molar_masses / m_bar
 
     @staticmethod
     def mass_to_mole(fluids: List[str], mass_fractions: List[float]):
-        if not np.isclose(sum(mass_fractions), 1.0, atol=1e-6):
-            raise ValueError("Mass fractions must sum to 1.0")
-        mass_fractions = np.asarray(mass_fractions, dtype=float)
+        """Convert mass fractions → mole fractions."""
+        if not np.isclose(sum(mass_fractions), 1.0, atol=1e-6): raise ValueError("Mole fractions must sum to 1.0")
         molar_masses = np.array([pyFluid(pyFluidsList[f]).molar_mass for f in fluids])
-        inv = mass_fractions / molar_masses
+        inv = np.asarray(mass_fractions) / molar_masses
         return inv / inv.sum()
-    
+
     @staticmethod
     def get_temperature_and_quality(fluid: pyFluid, P: float, target_enthalpy: float) -> Tuple[float, float]:
-        """Return (T, Q) given a fluid object, pressure, and enthalpy."""
+        """
+        Given a backend fluid, pressure, and enthalpy, return (T, Q).
+        """
         h_liquid = fluid.with_state(pyInput.quality(0), pyInput.pressure(P)).enthalpy
-        h_vapor  = fluid.with_state(pyInput.quality(1), pyInput.pressure(P)).enthalpy
+        h_vapor = fluid.with_state(pyInput.quality(1), pyInput.pressure(P)).enthalpy
         h = target_enthalpy
-
-        # Inside two-phase region → interpolate directly
         if h_liquid <= h <= h_vapor:
             Q = (h - h_liquid) / (h_vapor - h_liquid)
             T = fluid.with_state(pyInput.quality(Q), pyInput.pressure(P)).temperature
-            return T, Q
-
-        # Single-phase region → invert enthalpy to find T
-        def residual(T):
-            try:
-                st = fluid.with_state(pyInput.temperature(T), pyInput.pressure(P))
-                return st.enthalpy - h
-            except Exception:
-                return 1e13
-
-        # Narrow bracket around realistic range
-        Tmin = max(fluid.min_temperature, 50.0)  # avoid singularities
-        Tmax = fluid.max_temperature
-
-        sol = root_scalar(residual, method='brentq', bracket=[Tmin, Tmax])
-        if not sol.converged:
-            raise ValueError(f"Failed to find temperature for h={h} at P={P}")
-
-        T = sol.root
-        Q = 0.0 if h < h_liquid else 1.0 
-        return T, Q
-
-
-
-    @staticmethod
-    def get_saturation_pressure(
-        fluid: Union[str, Dict[str, float]],
-        T: float,
-        basis: str = "mole"
-    ) -> float:
-
-        if isinstance(fluid, str):
-            st = pyFluid(pyFluidsList[fluid])
-
-        elif isinstance(fluid, dict):
-            fluids = list(fluid.keys())
-            fractions = list(fluid.values())
-
-            if len(fluids) == 1:
-                st = pyFluid(pyFluidsList[fluids[0]])
-            else:
-                if basis == "mole":
-                    mass_fractions = Fluid.mole_to_mass(fluids, fractions)
-                elif basis == "mass":
-                    mass_fractions = np.array(fractions, dtype=float)
-                else:
-                    raise ValueError("basis must be 'mole' or 'mass'!")
-
-                st = pyMixture([pyFluidsList[f] for f in fluids], mass_fractions)
-
         else:
-            raise TypeError("fluid must be a string or dictionary")
-
-        if T < st.min_temperature or T > st.max_temperature:
-            raise ValueError(
-                f"Temperature {T} K is out of range "
-                f"({st.min_temperature} - {st.max_temperature} K)"
-            )
-        try:
-            Psat = st.with_state(pyInput.temperature(T), pyInput.quality(0)).pressure
-        except Exception as e:
-            raise ValueError(f"Failed to calculate saturation pressure: {e}")
-
-        return Psat
-
+            def residual(T):
+                try: return fluid.with_state(pyInput.temperature(T), pyInput.pressure(P)).enthalpy - h
+                except: return 1e13
+            sol = root_scalar(residual, method="brentq", bracket=[fluid.min_temperature, fluid.max_temperature])
+            T = sol.root
+            Q = 0.0 if h < h_liquid else 1.0
+        return T, Q
 
     @staticmethod
     def show_available_fluids():
+        """Print and return available fluid names."""
         for f in pyFluidsList:
-            if f.pure and f.name is not None: print(f.name)
-        return [f.name for f in pyFluidsList if f.pure and f.name is not None]
-    
+            if f.pure and f.name: print(f.name)
+        return [f.name for f in pyFluidsList if f.pure and f.name]
+
     @staticmethod
     def get_available_fluids():
-        return [f.name for f in pyFluidsList if f.pure and f.name is not None]
-
+        """Return available fluid names."""
+        return [f.name for f in pyFluidsList if f.pure and f.name]
 
 
 
@@ -485,8 +522,9 @@ if __name__ == "__main__":
     f = Fluid({"Nitrogen": 0.78, "Oxygen": 0.21, "Argon": 0.01}, basis="mole", P=101325, T=298.15)
     #f = Fluid({"Nitrogen": 1}, P=101325, h=311200)
     #f = Fluid("Methane", P=3e6, Q=0.1)
-    #f = Fluid("nDodecane", P=101325, T=300)
+    f = Fluid("nDodecane", P=101325, T=300)
     print(f)
+    print(f.minimum_pressure)
     #f.HP = 3.1e5, 2e5
     #f.mass_fractions = [0.4, 0.3, 0.3]
     print("-------------------")
@@ -494,5 +532,3 @@ if __name__ == "__main__":
     print(f)
     #Fluid.show_available_fluids()
     #print(Fluid.get_saturation_pressure({"Nitrogen": 0.79, "Oxygen": 0.11, "Methane": 0.1}, T=120))
-
-

@@ -1,7 +1,7 @@
 import bisect
 import numpy as np
-import cantera as ct
 import Globals
+from Fluids import Fluid
 
 class Value:
     """
@@ -67,15 +67,29 @@ class Value:
     def __call__(self, new_value=None, t=None):
         """
         If called with no arguments, return the current value.
-        If called with new_value, set it at the current global time (or supplied t).
+        If called with new_value, set it either as a constant (if no time) 
+        or as a time series point (if t or global time provided).
         """
         if new_value is None:
             return self.value
-        else:
-            if t is None:
+
+        # If no time provided and no global time system — treat as constant
+        if t is None:
+            try:
                 t = Globals.get_time()
-            self[t] = new_value   # uses __setitem__
-            return new_value
+            except NameError:
+                t = None
+
+        if t is None:
+            # set constant directly
+            self.set(new_value)
+        else:
+            # time-tagged assignment
+            self[t] = new_value
+
+        return new_value
+
+
 
     def __getitem__(self, t):
         return self.at(t)
@@ -134,13 +148,13 @@ class Parameter(Value):
 class Substance(Value):
     def set(self, data):
         def check(val):
-            if not isinstance(val, ct._cantera.ThermoPhase):
-                raise TypeError(f"Fluid must be a Cantera ThermoPhase, got {type(val)}")
+            if not isinstance(val, Fluid):
+                raise TypeError(f"Fluid must be a Fluid, got {type(val)}")
             return val
 
-        if isinstance(data, ct._cantera.ThermoPhase):
+        if isinstance(data, Fluid):
             super().set(check(data))
-        elif isinstance(data, list):  # [(t, thermo), ...]
+        elif isinstance(data, list):  # [(t, fluid), ...]
             super().set([(t, check(v)) for t, v in data])
         elif isinstance(data, tuple) and len(data) == 2:
             times, values = data
