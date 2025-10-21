@@ -67,27 +67,21 @@ class Value:
     def __call__(self, new_value=None, t=None):
         """
         If called with no arguments, return the current value.
-        If called with new_value, set it either as a constant (if no time) 
-        or as a time series point (if t or global time provided).
+        If called with new_value and no t, set as a constant (no promotion).
+        If called with new_value and t, set a time-series point at t.
         """
         if new_value is None:
             return self.value
 
-        # If no time provided and no global time system — treat as constant
         if t is None:
-            try:
-                t = Globals.get_time()
-            except NameError:
-                t = None
-
-        if t is None:
-            # set constant directly
+            # constant assignment (uses subclass .set for coercion/validation)
             self.set(new_value)
         else:
-            # time-tagged assignment
+            # time-tagged assignment (promotes if needed)
             self[t] = new_value
 
         return new_value
+
 
 
 
