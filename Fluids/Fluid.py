@@ -391,16 +391,31 @@ class Fluid:
 
     @property
     def quality(self) -> float:
-        """Return vapor quality (0–1)."""
-        h_liquid = self._backend.with_state(pyInput.pressure(self._P), pyInput.quality(0.0)).enthalpy
-        h_vapor = self._backend.with_state(pyInput.pressure(self._P), pyInput.quality(1.0)).enthalpy
-        if self._h >= h_vapor: return 1.0
-        if self._h <= h_liquid: return 0.0
-        return self._pyfluid.quality
+        """
+        Vapor quality (0-1). Only meaningful in TwoPhase region.
+        Returns 0.0 for liquid-like single phase, 1.0 for gas/supercritical single phase.
+        """
+        ph = self.phase  # uses self._pyfluid.phase.name (no PQ flash)
+
+        if ph == "TwoPhase":
+            # In two-phase, CoolProp/pyfluids quality should be valid
+            return float(self._pyfluid.quality)
+
+        # Outside two-phase, "quality" isn't defined.
+        # Pick a consistent convention:
+        if ph in ("Gas", "Supercritical", "SupercriticalGas"):
+            return 1.0
+        if ph in ("Liquid", "SupercriticalLiquid"):
+            return 0.0
+
+        # Unknown -> don't crash; just return NaN
+        return float("nan")
 
     @property
     def saturation_temperature(self) -> float:
-        """Return saturation temperature (K) at current pressure."""
+        """Saturation temperature only defined for P <= Pc."""
+        if self.pressure > self.critical_pressure:
+            return None
         return self._backend.with_state(pyInput.pressure(self._P), pyInput.quality(1.0)).temperature
 
     # ---------------- String output ---------------- #
